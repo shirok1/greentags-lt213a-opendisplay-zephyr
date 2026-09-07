@@ -41,6 +41,18 @@ static bool has_command(unsigned start, unsigned command)
     }
     return false;
 }
+static void check_register(unsigned command, const uint8_t *expected, unsigned length)
+{
+    for (unsigned i = 0; i < count; i++) {
+        if (wire[i].data || wire[i].value != command) { continue; }
+        for (unsigned j = 0; j < length; j++) {
+            assert(i + j + 1 < count && wire[i + j + 1].data);
+            assert(wire[i + j + 1].value == expected[j]);
+        }
+        return;
+    }
+    assert(!"Missing register");
+}
 static void check_idle(void)
 {
     assert(pins[1] == 1 && pins[3] == 1 && pins[0] == 0 && pins[30] == 0 && pins[2] == 0 && pins[5] == 0);
@@ -66,6 +78,25 @@ int main(void)
         assert(!wire[count - 2].data && wire[count - 2].value == 7);
         assert(wire[count - 1].data && wire[count - 1].value == 0xa5);
     }
+    check_idle();
+    /* Non-square T5 region: verify vendor settings and both inverted planes. */
+    count = 0;
+    assert(!epd_region(8, 3, 16, 2));
+    check_register(0x01, (uint8_t[]){3, 2, 0x21, 0x21}, 4);
+    check_register(0x00, (uint8_t[]){0xbf, 0x0d}, 2);
+    check_register(0x30, (uint8_t[]){0x3c}, 1);
+    check_register(0x50, (uint8_t[]){0x47}, 1);
+    check_register(0x90, (uint8_t[]){8, 23, 0, 3, 0, 4, 0x28}, 7);
+    const uint8_t transitions[] = {0, 0, 0x20, 0x10, 0};
+    for (unsigned i = 0; i < 5; i++) {
+        uint8_t lut[44] = {transitions[i], 1, 100, 0, 0, 1};
+        check_register(0x20 + i, lut, i ? 42 : 44);
+    }
+    uint8_t planes[] = {0x00, 0xff, 0xaa, 0x55, 0xff, 0x00, 0x55, 0xaa};
+    assert(!epd_write(planes, 3) && !epd_write(planes + 3, 5));
+    check_register(0x10, (uint8_t[]){0xff, 0, 0x55, 0xaa}, 4);
+    check_register(0x13, (uint8_t[]){0, 0xff, 0xaa, 0x55}, 4);
+    assert(!epd_finish(2));
     check_idle();
     /* A timeout cannot mark the panel asleep or issue deep sleep prematurely. */
     count = 0; stuck = true;

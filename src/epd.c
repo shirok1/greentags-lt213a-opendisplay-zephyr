@@ -37,6 +37,10 @@ static void byte_out(uint8_t value, bool data)
 
 static void cmd(uint8_t value) { byte_out(value, false); }
 static void data(uint8_t value) { byte_out(value, true); }
+/* On this LT213A, the vendor's 14-frame phase left both transitions incomplete.
+ * Testing two 100-frame partial passes (white, then target) on this panel. Keep the
+ * timing identical in all five LUTs. Calibrate against the actual panel. */
+#define PARTIAL_DRIVE_FRAMES 100
 static bool partial;
 static bool awake;
 static size_t plane_bytes, plane_written;
@@ -79,18 +83,21 @@ int epd_init(void)
     return 0;
 }
 
-int epd_begin(void)
+static int panel_begin(bool region)
 {
-    partial = false;
+    partial = region;
     gpio_pin_set_dt(&bs, 0);
     panel_reset();
+    if (region) { cmd(0x01); data(0x03); data(0x02); data(0x21); data(0x21); }
     cmd(0x06); data(0x17); data(0x17); data(0x17);
     cmd(0x04);
     k_msleep(10); /* allow BUSY to assert before polling */
     int err = wait_ready();
     if (err) { epd_off(); return err; }
-    cmd(0x00); data(0x1f); data(0x0d);
+    cmd(0x00); data(region ? 0xbf : 0x1f); data(0x0d);
+    if (region) { cmd(0x30); data(0x3c); }
     cmd(0x61); data(0x68); data(0x00); data(0xd4);
+    if (region) { return 0; }
     cmd(0x50); data(0x97);
     cmd(0x10);
     for (size_t i = 0; i < EPD_FRAME_BYTES; i++) { data(0xff); }
@@ -98,28 +105,29 @@ int epd_begin(void)
     return 0;
 }
 
+int epd_begin(void) { return panel_begin(false); }
+
 int epd_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
     if (!w || !h || ((x | w) & 7) || x + w > EPD_WIDTH || y + h > EPD_HEIGHT) { return -EINVAL; }
-    int err = epd_begin();
+    int err = panel_begin(true);
     if (err) { return err; }
-    /* Differential UC8151 waveforms: VCOM, W->W, B->W, W->B, B->B.
-     * Register waveform form follows GxEPD2_213_T5D (_Init_Part).
-     * Only the first phase is active (25 frames); the rest is zero-filled. */
-    cmd(0x00); data(0xbf);
+    /* Good Display GDEW0213T5 Arduino P20201021: register LUT,
+     * VCOM / W->W / B->W / W->B / B->B, zero-filled after phase one. */
     cmd(0x82); data(0x08);
-    cmd(0x50); data(0x17);
-    const uint8_t transitions[] = {0x00, 0x00, 0x80, 0x40, 0x00};
+    cmd(0x50); data(0x47);
+    const uint8_t transitions[] = {0x00, 0x00, 0x20, 0x10, 0x00};
     for (unsigned lut = 0; lut < 5; lut++) {
         cmd(0x20 + lut);
         unsigned count = lut == 0 ? 44 : 42;
         for (unsigned i = 0; i < count; i++) {
-            data(i == 0 ? transitions[lut] : i == 1 ? 25 : (i == 2 || i == 5) ? 1 : 0);
+            data(i == 0 ? transitions[lut] : i == 2 ? PARTIAL_DRIVE_FRAMES : (i == 1 || i == 5) ? 1 : 0);
         }
     }
     cmd(0x91); cmd(0x90);
     data(x); data(x + w - 1);
-    data(y >> 8); data(y); data((y + h - 1) >> 8); data(y + h - 1); data(1);
+    data(y >> 8); data(y); data((y + h - 1) >> 8); data(y + h - 1);
+    data(0x28);
     cmd(0x10);
     plane_bytes = (w / 8) * h; plane_written = 0; partial = true;
     return 0;
@@ -129,7 +137,8 @@ int epd_write(const uint8_t *bytes, size_t len)
 {
     for (size_t i = 0; i < len; i++) {
         if (partial && plane_written == plane_bytes) { cmd(0x13); }
-        data(bytes[i]);
+        /* T5 register LUT expects the inverse of OpenDisplay wire pixels. */
+        data(partial ? (uint8_t)~bytes[i] : bytes[i]);
         if (partial) { plane_written++; }
     }
     return 0;

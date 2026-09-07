@@ -18,8 +18,9 @@ stack headroom, power consumption, and physical power-loss recovery remain unver
 
 - Raw and zlib image streaming, PIPE sequence/SACK handling, configuration persistence,
   and application-layer authentication/encryption are implemented.
-- Partial-refresh protocol support is implemented, but its T5D-derived waveform is
-  **not yet validated on the T5 panel**. Full-screen fast mode uses the full-refresh waveform.
+- Partial-refresh protocol support is implemented, but its vendor T5 waveform is
+  tested through forward/reverse hardware partial updates, with a calibrated waveform; **slight ghosting remains**.
+  See [T5 partial test](docs/partial-t5.md). Full-screen fast mode uses the full-refresh waveform.
 - No external Flash, LED, buzzer, NFC, power latch, wake button, or battery-sense circuit
   is assumed. Unsupported hardware commands return errors. Firmware updates use **SWD**, not OTA.
 - The included BLE uploader uses `py-opendisplay` 7.14.1 (compatible with Python 3.11/3.12)
