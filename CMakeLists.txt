@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20.0)
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(greentags_opendisplay C)
+execute_process(COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE OD_BUILD_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT OD_BUILD_SHA)
+    set(OD_BUILD_SHA "unknown")
+endif()
+target_compile_definitions(app PRIVATE OD_BUILD_SHA="${OD_BUILD_SHA}")
 target_sources(app PRIVATE src/main.c src/protocol.c src/epd.c)
 target_include_directories(app PRIVATE src)
 target_sources(app PRIVATE src/config_store.c src/storage.c)

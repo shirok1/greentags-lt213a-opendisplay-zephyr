@@ -4,6 +4,10 @@
 #include "config_store.h"
 #include "uzlib.h"
 
+#ifndef OD_BUILD_SHA
+#define OD_BUILD_SHA "unknown"
+#endif
+
 static uint32_t le(const uint8_t *p, unsigned n)
 { uint32_t v = 0; for (unsigned i = 0; i < n; i++) { v |= (uint32_t)p[i] << (8 * i); } return v; }
 static uint32_t be(const uint8_t *p, unsigned n)
@@ -80,6 +84,18 @@ static int start_region(struct od_protocol *p, const struct od_io *io,
     return 0;
 }
 
+static int finish_transfer(struct od_protocol *p, const struct od_io *io,
+                           uint8_t cmd, uint8_t mode, uint32_t etag)
+{
+    int err = p->pipe ? sack(p, io, 0) : 0;
+    if (!err) { err = reply(io, cmd, true); }
+    if (err) { od_abort(p, io); return err; }
+    err = io->finish(io->ctx, mode);
+    p->displayed_etag = err ? 0 : etag;
+    od_reset(p);
+    return reply(io, err ? 0x74 : 0x73, true);
+}
+
 int od_handle(struct od_protocol *p, const struct od_io *io,
               const uint8_t *data, size_t len)
 {
@@ -131,7 +147,9 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
         od_abort(p, io); return reply(io, cmd, !od_config_clear());
     case 0x43: {
         if (size) { return reply(io, cmd, false); }
-        const uint8_t response[] = {0, 0x43, 0, 2, 0, 0}; /* 0.2.0, no SHA */
+        uint8_t response[6 + sizeof(OD_BUILD_SHA) - 1] = {0, 0x43, 0, 2, sizeof(OD_BUILD_SHA) - 1};
+        memcpy(response + 5, OD_BUILD_SHA, sizeof(OD_BUILD_SHA) - 1);
+        /* Patch version follows the SHA; the zero initializer supplies it. */
         return io->send(io->ctx, response, sizeof(response));
     }
     case 0x44: {
@@ -172,13 +190,8 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
             (((size == 1 || size == 5) && payload[0] <= (p->partial ? 2 : 1)) || (!size && p->partial && p->pipe)) &&
             !stream(p, io, NULL, 0, true) && p->received == p->expected && (!p->compressed || p->zdone);
         if (!complete) { od_abort(p, io); return reply(io, cmd, false); }
-        if (p->pipe) { int err = sack(p, io, 0); if (err) { od_abort(p, io); return err; } }
-        int err = reply(io, cmd, true);
-        if (err) { od_abort(p, io); return err; }
-        err = io->finish(io->ctx, size ? payload[0] : 2);
-        p->displayed_etag = err ? 0 : size == 5 ? be(payload + 1, 4) : p->new_etag;
-        od_reset(p);
-        return reply(io, err ? 0x74 : 0x73, true);
+        return finish_transfer(p, io, cmd, size ? payload[0] : 2,
+                               size == 5 ? be(payload + 1, 4) : p->new_etag);
     }
     case 0x0f:
         if (size) { return reply(io, cmd, false); }
@@ -235,7 +248,15 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
             if (payload[0] != p->next_seq && behind <= 33 && behind && behind <= p->pipe_frames) { return sack(p, io, 0); }
             if (payload[0] == p->next_seq) {
                 int err = stream(p, io, payload + 1, size - 1, false);
-                if (!err) { p->next_seq++; p->pipe_frames++; return sack(p, io, 0); }
+                if (!err) {
+                    p->next_seq++; p->pipe_frames++;
+                    /* Only raw full frames auto-finish; compressed and partial
+                     * streams still require END to validate/commit metadata. */
+                    if (!p->compressed && !p->partial && p->received == p->expected) {
+                        return finish_transfer(p, io, 0x82, 0, 0);
+                    }
+                    return sack(p, io, 0);
+                }
                 error = p->compressed ? 2 : 3;
             }
         }

@@ -225,6 +225,16 @@ int main(void)
     read_temperature();
     err = bt_enable(NULL);
     if (err) { return err; }
+    /* Match upstream nRF names: OD + DEVICEID[1]'s low 24 bits. */
+    char name[] = "OD000000";
+    uint32_t chip_id = NRF_FICR->DEVICEID[1];
+    for (int i = 7; i >= 2; --i) {
+        name[i] = "0123456789ABCDEF"[chip_id & 0xf];
+        chip_id >>= 4;
+    }
+    err = bt_set_name(name);
+    if (err) { return err; }
+    scan_response[0].data = (const uint8_t *)bt_get_name();
     err = advertise(true);
     if (err) { return err; }
     bool fast_advertising = true;

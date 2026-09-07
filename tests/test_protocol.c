@@ -114,14 +114,24 @@ static void pipe_tests(void)
         uint32_t mask = response[0][3] | (uint32_t)response[0][4] << 8 | (uint32_t)response[0][5] << 16 | (uint32_t)response[0][6] << 24;
         assert(mask == (count >= 32 ? UINT32_MAX : (1u << count) - 1));
         size_t already = written;
-        command(0x81, frame, take + 1, true); /* retransmit: ACK, no duplicate write */
-        assert(written == already);
+        if (pos + take < EPD_FRAME_BYTES) {
+            assert(responses == 1 && p.active);
+            command(0x81, frame, take + 1, true); /* retransmit: no duplicate write */
+            assert(written == already);
+        } else {
+            assert(responses == 3 && response[1][1] == 0x82 && response[2][1] == 0x73);
+            assert(!p.active && p.displayed_etag == 0);
+        }
         pos += take; count++;
     }
     assert(count > 256);
     uint8_t end[] = {0, 1, 2, 3, 4}, packet[] = {0, 0x82, 0, 1, 2, 3, 4};
+    int finished = finishes;
     responses = 0; assert(!od_handle(&p, &io, packet, sizeof(packet)));
-    assert(responses == 3 && response[0][1] == 0x81 && response[1][1] == 0x82 && response[2][1] == 0x73);
+    assert(responses == 1 && response[0][0] == 255 && finishes == finished);
+    /* Establish an etag through explicit direct-write END for partial tests. */
+    upload(230);
+    command(0x72, end, sizeof(end), true);
     assert(p.displayed_etag == 0x01020304);
     uint8_t partial[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 8, 0, 2, 0, 16, 0, 16};
     command(0x76, partial, sizeof(partial), true);
@@ -236,7 +246,11 @@ int main(void)
     assert(out && fwrite(config, 1, total, out) == total);
     fclose(out);
     command(0x43, NULL, 0, true);
-    assert(sizes[0] == 6 && response[0][3] == 2);
+    assert(response[0][3] == 2 && response[0][4] > 0);
+    assert(sizes[0] == 6 + response[0][4] && response[0][sizes[0] - 1] == 0);
+    out = fopen("build/test-version.bin", "wb");
+    assert(out && fwrite(response[0], 1, sizes[0], out) == sizes[0]);
+    fclose(out);
     command(0x44, NULL, 0, true);
     assert(sizes[0] == 18 && !memcmp(response[0] + 2, msd, 16));
     command(0x50, NULL, 0, true);
