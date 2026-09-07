@@ -37,10 +37,12 @@ bool od_security_expire(struct od_security *s, uint32_t now)
 {
     const uint8_t *c = od_config_security();
     uint32_t timeout = c ? (c[17] | c[18] << 8) * 1000u : 0;
-    if (s->authenticated && timeout && now - s->activity >= timeout) { od_security_reset(s); return true; }
+    if (s->authenticated && timeout && now - s->session_start >= timeout) { od_security_reset(s); return true; }
     return false;
 }
 
+/* Keep crypto scratch frames out of main/dispatch when LTO is enabled. */
+__attribute__((noinline))
 int od_security_auth(struct od_security *s, const uint8_t *p, size_t len,
     uint32_t now, const uint8_t device_id[4], int (*random)(void *, size_t), uint8_t out[23])
 {
@@ -78,12 +80,14 @@ int od_security_auth(struct od_security *s, const uint8_t *p, size_t len,
     if (!cmac(s->key, input, 36, proof)) { od_security_reset(s); return 3; }
     out[2] = 0; memcpy(out + 3, proof, 16);
     wipe(input, sizeof(input)); wipe(proof, sizeof(proof)); wipe(s->challenge, sizeof(s->challenge));
-    s->authenticated = true; s->activity = now;
+    s->authenticated = true; s->session_start = now;
     return 19;
 }
 
+__attribute__((noinline))
 int od_security_decrypt(struct od_security *s, uint8_t *frame, size_t len, uint32_t now)
 {
+    (void)now; /* Only authentication starts the absolute session lifetime. */
     if (!s->authenticated || len < 31 || len > 244 || !equal(frame + 2, s->id, 8)) { return -EACCES; }
     uint64_t counter = read64(frame + 10);
     if (counter >> 63) { return -EACCES; }
@@ -99,7 +103,7 @@ int od_security_decrypt(struct od_security *s, uint8_t *frame, size_t len, uint3
         s->replay = !s->rx_seen || ahead >= 32 ? 1 : (s->replay << ahead) | 1;
         s->rx_counter = counter;
     } else { s->replay |= 1u << behind; }
-    s->rx_seen = true; s->activity = now;
+    s->rx_seen = true;
     size_t size = frame[18]; memmove(frame + 2, frame + 19, size); return size + 2;
 }
 

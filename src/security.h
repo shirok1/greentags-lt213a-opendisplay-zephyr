@@ -6,7 +6,7 @@
 struct od_security {
     uint8_t key[16], id[8], challenge[16];
     uint64_t rx_counter, tx_counter;
-    uint32_t replay, challenge_time, activity, rate_time;
+    uint32_t replay, challenge_time, session_start, rate_time;
     uint8_t attempts;
     bool authenticated, pending, rx_seen;
 };

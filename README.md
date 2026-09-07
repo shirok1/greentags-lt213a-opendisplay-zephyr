@@ -63,8 +63,8 @@ and retains build artifacts; a successful CI run is not a hardware certification
 
 The locally tested Arm GNU 15.3.Rel1 build uses **92,956 B Flash / 16,168 B RAM**.
 The application has 126 KiB Flash; the final 2 KiB hold two configuration transaction slots.
-Only **216 B of RAM remains outside reserved stacks and buffers**. Stack high-water marks
-still require hardware measurement. There is no full-frame MCU buffer or dynamic heap.
+Only **48 B of RAM remains outside reserved stacks and buffers**. After the encrypted hardware regression, unused stack prefixes were 252 B (main)
+and 380 B (system workqueue); these are observed margins, not worst-case proofs. There is no full-frame MCU buffer or dynamic heap.
 
 ## Flash and upload
 

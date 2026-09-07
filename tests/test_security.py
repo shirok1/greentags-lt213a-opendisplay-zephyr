@@ -76,7 +76,10 @@ wire = out.raw[:size]
 assert size == 31 and wire[:2] == plain
 assert int.from_bytes(wire[10:18], "big") == 1 << 63
 assert AESCCM(session, tag_length=12).decrypt(wire[5:18], wire[18:], wire[:2]) == b"\0"
-assert lib.expire(62000) == 1 and not lib.authenticated()
+# Valid traffic immediately before expiry must not renew the session.
+assert lib.expire(60999) == 0
+assert decrypt(packet(102), now=60999)[0] == 7
+assert lib.expire(61000) == 1 and not lib.authenticated()
 assert decrypt(packet(102))[0] < 0
 
 # Proof without a challenge, wrong proof, challenge replay and expiry.

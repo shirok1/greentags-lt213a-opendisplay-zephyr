@@ -65,8 +65,8 @@ static const struct bt_data advertising[] = {
     BT_DATA_BYTES(BT_DATA_UUID16_ALL, 0x46, 0x24),
     BT_DATA(BT_DATA_MANUFACTURER_DATA, msd, sizeof(msd)),
 };
-static const struct bt_data scan_response[] = {
-    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+static struct bt_data scan_response[] = {
+    BT_DATA(BT_DATA_NAME_COMPLETE, NULL, 8),
 };
 
 /* OpenDisplay's Bluefruit setInterval(fast, slow) selects two phases,
@@ -171,11 +171,16 @@ static int dispatch(struct command *command, const struct od_io *io)
     }
     if (od_security_enabled() && !(command->data[0] == 0 && command->data[1] == 0x43)) {
         if (!security.authenticated) {
-            const uint8_t response[] = {0xfe, command->data[1]};
+            const uint8_t response[] = {0, command->data[1], 0xfe};
             return send_wire(command, response, sizeof(response));
         }
         int count = od_security_decrypt(&security, command->data, command->size, now);
-        if (count < 0) { return count; }
+        if (count < 0) {
+            /* PIPE DATA retransmissions must not abort the transfer/session. */
+            if (count == -EALREADY && command->data[0] == 0 && command->data[1] == 0x81) { return 0; }
+            const uint8_t response[] = {0, command->data[1], 0xff};
+            return send_wire(command, response, sizeof(response));
+        }
         command->size = count;
     }
     return od_handle(&protocol, io, command->data, command->size);
