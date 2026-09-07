@@ -8,6 +8,7 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/random/random.h>
 #include <hal/nrf_ficr.h>
+#include <hal/nrf_wdt.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/reboot.h>
 #include <errno.h>
@@ -218,8 +219,21 @@ static void disconnect_idle(struct bt_conn *conn, void *ctx)
     }
 }
 
+/* No driver state or extra thread: this board has only 16 KiB RAM. Run while
+ * sleeping, pause only for a halted debugger. Feed solely from the main loop;
+ * 180 s covers its 60 s idle wait plus bounded panel timeout/cleanup paths. */
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+{
+    ARG_UNUSED(reason); ARG_UNUSED(esf);
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
 int main(void)
 {
+    nrf_wdt_behaviour_set(NRF_WDT, NRF_WDT_BEHAVIOUR_RUN_SLEEP_MASK);
+    nrf_wdt_reload_value_set(NRF_WDT, 180u * 32768u - 1u);
+    nrf_wdt_reload_request_enable(NRF_WDT, NRF_WDT_RR0);
+    nrf_wdt_task_trigger(NRF_WDT, NRF_WDT_TASK_START);
     extern int storage_init(void);
     int storage_err = storage_init();
     if (storage_err) { return storage_err; }
@@ -250,6 +264,7 @@ int main(void)
     int64_t last_telemetry = k_uptime_get();
     int64_t last_temperature = last_telemetry;
     for (;;) {
+        nrf_wdt_reload_request_set(NRF_WDT, NRF_WDT_RR0);
         struct command command;
         const struct od_io io = { .send = send_response, .begin = begin,
             .write = write_panel, .finish = finish, .abort = abort_panel,
@@ -264,6 +279,9 @@ int main(void)
         if (atomic_get(&generation) == current) {
             (void)k_sem_take(&events, K_MSEC(MAX(deadline - now, 0)));
         }
+        /* Waiting and command processing each get a full watchdog interval.
+         * A slow multi-notification config read can outlast one idle period. */
+        nrf_wdt_reload_request_set(NRF_WDT, NRF_WDT_RR0);
         int received = k_msgq_get(&commands, &command, K_NO_WAIT);
         now = k_uptime_get();
         atomic_val_t next = atomic_get(&generation);
