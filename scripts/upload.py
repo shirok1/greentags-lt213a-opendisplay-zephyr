@@ -1,13 +1,10 @@
 """OpenDisplay BLE scanner/uploader for devices with authentication disabled."""
 import argparse
 import asyncio
-import zlib
 from pathlib import Path
 
-from bleak import BleakClient, BleakScanner
+from opendisplay import OpenDisplayDevice, discover_devices
 from PIL import Image, ImageDraw, ImageOps
-
-UUID = "00002446-0000-1000-8000-00805f9b34fb"
 
 
 def image_bytes(path=None):
@@ -33,45 +30,14 @@ def image_bytes(path=None):
 
 
 async def scan():
-    devices = await BleakScanner.discover(timeout=8, return_adv=True)
-    for device, adv in devices.values():
-        if 0x2446 in adv.manufacturer_data or UUID in adv.service_uuids:
-            print(f"{device.address}  {adv.local_name or device.name}  RSSI={adv.rssi}")
+    for name, address in (await discover_devices(timeout=8)).items():
+        print(f"{address}  {name}")
 
 
 async def upload(address, data, compress=False):
-    notifications = asyncio.Queue()
-    async with BleakClient(address, timeout=20) as client:
-        service = client.services.get_service(UUID)
-        characteristic = service.get_characteristic(UUID) if service else None
-        if characteristic is None:
-            raise RuntimeError("OpenDisplay service/characteristic 0x2446 missing")
-        await client.start_notify(characteristic, lambda _, value: notifications.put_nowait(bytes(value)))
-
-        async def expect(opcode, timeout=15):
-            value = await asyncio.wait_for(notifications.get(), timeout)
-            if len(value) < 2 or value[0] != 0 or value[1] != opcode:
-                raise RuntimeError(f"Expected ACK {opcode:02x}, received {value.hex(' ')}")
-            return value
-
-        async def command(opcode, payload=b""):
-            await client.write_gatt_char(characteristic, bytes([0, opcode]) + payload, response=True)
-            return await expect(opcode, timeout=70 if opcode == 0x70 else 15)
-
-        version = await command(0x43)
-        print(f"Firmware {version[2]}.{version[3]}")
-        header = b""
-        if compress:
-            header = len(data).to_bytes(4, "little")
-            compressor = zlib.compressobj(wbits=9)
-            data = compressor.compress(data) + compressor.flush()
-        await command(0x70, header)
-        # 18 bytes always fit the default ATT MTU=23, including macOS/BlueZ
-        # backends that do not expose MTU exchange. Firmware also accepts 230.
-        for offset in range(0, len(data), 18):
-            await command(0x71, data[offset:offset + 18])
-        await command(0x72, b"\0")
-        await expect(0x73, timeout=70)
+    async with OpenDisplayDevice(mac_address=address, timeout=20) as device:
+        image = Image.frombytes("1", (104, 212), data)
+        await device.upload_prepared_image((data, None, image), compress=compress)
         print("Panel refresh succeeded")
 
 

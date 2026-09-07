@@ -103,6 +103,9 @@ int od_security_decrypt(struct od_security *s, uint8_t *frame, size_t len, uint3
     size_t size = frame[18]; memmove(frame + 2, frame + 19, size); return size + 2;
 }
 
+/* Do not reserve AES/CCM state in send_response while an unencrypted BLE
+ * notification is sent: that overflows the 1280-byte main stack with LTO. */
+__attribute__((noinline))
 int od_security_encrypt(struct od_security *s, const uint8_t *plain, size_t len, uint8_t *out, size_t capacity)
 {
     if (!s->authenticated || len < 2 || len > 215 || capacity < len + 29 || s->tx_counter == UINT64_MAX) { return -EINVAL; }

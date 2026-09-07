@@ -11,9 +11,10 @@ This is an independent port, not an official OpenDisplay firmware release.
 
 ## Status
 
-**Experimental; hardware validation is still pending.** ARM cross-compilation and
-host tests pass locally. BLE interoperability, panel waveforms, stack headroom,
-power consumption, and physical power-loss recovery have not been measured on the board.
+**Experimental; full-screen BLE uploads are hardware-tested.** ARM cross-compilation and
+host tests pass locally. Official Python package version queries and default PIPE raw/zlib
+uploads work on the board. Partial waveforms, authenticated interoperability, worst-case
+stack headroom, power consumption, and physical power-loss recovery remain unverified.
 
 - Raw and zlib image streaming, PIPE sequence/SACK handling, configuration persistence,
   and application-layer authentication/encryption are implemented.
@@ -21,7 +22,8 @@ power consumption, and physical power-loss recovery have not been measured on th
   **not yet validated on the T5 panel**. Full-screen fast mode uses the full-refresh waveform.
 - No external Flash, LED, buzzer, NFC, power latch, wake button, or battery-sense circuit
   is assumed. Unsupported hardware commands return errors. Firmware updates use **SWD**, not OTA.
-- The included BLE uploader supports unauthenticated raw/compressed uploads only.
+- The included BLE uploader uses `py-opendisplay` 7.14.1 (compatible with Python 3.11/3.12)
+  for discovery, protocol, compression and refresh confirmation. The helper exposes unauthenticated raw/compressed uploads.
 
 ## Wiring
 
@@ -90,7 +92,7 @@ The protocol reference is OpenDisplay/Firmware commit
 | Capability | Bound / behavior |
 | --- | --- |
 | Full image | 2,756 bytes, row-major, MSB first; 0 black, 1 white |
-| Direct-write data | Up to 230 bytes per command; uploader uses 18 bytes |
+| Direct-write data | Up to 230 data bytes per command; upstream uploader defaults (230-byte DATA / 200-byte START) |
 | Compression | Streaming zlib, 512-byte window, Adler32 validation |
 | PIPE | Negotiated window and ACK interval both 1; duplicate suppression and SACK |
 | Configuration | Up to 768 bytes, CRC validation, two-slot Flash commit |
