@@ -1,0 +1,34 @@
+/dts-v1/;
+#include <nordic/nrf51822_qfab.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+    model = "Greentags LT213A nRF51822 128K/16K";
+    compatible = "greentags,lt213a";
+    chosen {
+        zephyr,sram = &sram0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &app_partition;
+    };
+    zephyr,user {
+        mosi-gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
+        sck-gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>;
+        cs-gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+        busy-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+        bs-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+    };
+};
+&gpio0 { status = "okay"; };
+&gpiote { status = "okay"; };
+&uart0 { status = "disabled"; };
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        app_partition: partition@0 { label = "application"; reg = <0 0x1f800>; };
+        storage_partition: partition@1f800 { label = "config"; reg = <0x1f800 0x800>; };
+    };
+};

@@ -1,0 +1,2 @@
+config BOARD_LT213A
+    select SOC_NRF51822_QFAB

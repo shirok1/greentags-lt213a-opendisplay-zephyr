@@ -1,0 +1,21 @@
+# Downloaded dependencies and uv environment
+/.deps/
+/.venv/
+
+# Build products and local test fixtures
+/build*/
+__pycache__/
+*.py[cod]
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp

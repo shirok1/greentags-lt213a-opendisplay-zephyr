@@ -1,0 +1,79 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install compilers and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi
+          arm-none-eabi-gcc --version
+          cmake --version
+      - name: Install locked Python dependencies
+        run: uv sync --locked
+      - name: Build default firmware and check memory
+        run: uv run --locked python scripts/build.py --setup --pristine | tee default-build.log
+      - name: Run host tests
+        run: uv run --locked python scripts/test.py
+      - name: Package corresponding project source
+        run: git archive --format=tar.gz --output=build/project-source.tar.gz HEAD
+      - name: Save default firmware
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lt213a-default-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/zephyr/zephyr.hex
+            build/zephyr/zephyr.bin
+            build/zephyr/zephyr.elf
+            build/zephyr/zephyr.map
+            COPYING
+            NOTICE.md
+            third_party/uzlib/LICENSE
+            build/project-source.tar.gz
+            default-build.log
+      - name: Build experimental panel-sleep firmware
+        run: uv run --locked python scripts/build.py --epd-deep-sleep | tee experimental-build.log
+      - name: Save experimental firmware
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lt213a-experimental-panel-sleep-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/zephyr/zephyr.hex
+            build/zephyr/zephyr.bin
+            build/zephyr/zephyr.elf
+            build/zephyr/zephyr.map
+            COPYING
+            NOTICE.md
+            third_party/uzlib/LICENSE
+            build/project-source.tar.gz
+            experimental-build.log
