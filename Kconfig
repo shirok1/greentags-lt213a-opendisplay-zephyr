@@ -1,11 +1,11 @@
 mainmenu "LT213A OpenDisplay"
 
 config LT213A_EPD_DEEP_SLEEP
-    bool "Experimental panel deep sleep (0x07 A5)"
-    default n
+    bool "Panel deep sleep (0x07 A5)"
+    default y
     help
       Send the UC8151 deep-sleep command after successful power-off.
-      The supplied GDEW0213T5 demo only uses power-off; validate panel
-      compatibility and wake-up by RESET on hardware before enabling.
+      RESET wakes the panel for the next transfer. BUSY timeout cleanup
+      never sends deep sleep before successful power-off.
 
 source "Kconfig.zephyr"

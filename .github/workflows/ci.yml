@@ -59,12 +59,12 @@ jobs:
             third_party/uzlib/LICENSE
             build/project-source.tar.gz
             default-build.log
-      - name: Build experimental panel-sleep firmware
-        run: uv run --locked python scripts/build.py --epd-deep-sleep | tee experimental-build.log
-      - name: Save experimental firmware
+      - name: Build power-off comparison firmware
+        run: uv run --locked python scripts/build.py --no-epd-deep-sleep | tee power-off-build.log
+      - name: Save power-off comparison firmware
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: lt213a-experimental-panel-sleep-${{ github.sha }}
+          name: lt213a-power-off-${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -76,4 +76,4 @@ jobs:
             NOTICE.md
             third_party/uzlib/LICENSE
             build/project-source.tar.gz
-            experimental-build.log
+            power-off-build.log
