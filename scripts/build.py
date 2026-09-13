@@ -37,6 +37,7 @@ def main():
     )):
         parser.error("Run with --setup first")
     env = os.environ.copy()
+    run(sys.executable, str(ROOT / "scripts/patch_zephyr.py"))
     env["ZEPHYR_BASE"] = str(DEPS / "zephyr")
     if "ZEPHYR_TOOLCHAIN_VARIANT" not in env:
         compiler = shutil.which("arm-none-eabi-gcc")

@@ -10,6 +10,7 @@
 #include <hal/nrf_ficr.h>
 #include <hal/nrf_wdt.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/reboot.h>
 #include <errno.h>
 #include <string.h>
@@ -236,6 +237,19 @@ int main(void)
     int err = epd_init();
     if (err) { return err; }
     (void)od_read_msd(msd);
+    /* Preserve Nordic's factory static identity without vendor HCI commands.
+     * Same FICR validity and static-address bits as Zephyr's Nordic controller.
+     */
+    if ((NRF_FICR->DEVICEADDRTYPE & 1) &&
+        (NRF_FICR->DEVICEADDR[0] != UINT32_MAX ||
+         (NRF_FICR->DEVICEADDR[1] & UINT16_MAX) != UINT16_MAX)) {
+        bt_addr_le_t identity = {.type = BT_ADDR_LE_RANDOM};
+        sys_put_le32(NRF_FICR->DEVICEADDR[0], identity.a.val);
+        sys_put_le16(NRF_FICR->DEVICEADDR[1], identity.a.val + 4);
+        BT_ADDR_SET_STATIC(&identity.a);
+        err = bt_id_create(&identity, NULL);
+        if (err < 0) { return err; }
+    }
     err = bt_enable(NULL);
     if (err) { return err; }
     /* Match upstream nRF names: OD + DEVICEID[1]'s low 24 bits. */
