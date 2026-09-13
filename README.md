@@ -21,7 +21,7 @@ stack headroom, power consumption, and physical power-loss recovery remain unver
 - Partial-refresh protocol support is implemented, but its vendor T5 waveform is
   tested through forward/reverse hardware partial updates, with a calibrated waveform; **slight ghosting remains**.
   See [T5 partial test](docs/partial-t5.md). Full-screen fast mode uses the full-refresh waveform.
-- No external Flash, LED, buzzer, NFC, power latch, wake button, or battery-sense circuit
+- No external Flash, LED, buzzer, NFC, power latch, wake button, or external battery-sense circuit (the internal ADC measures VDD as a battery proxy)
   is assumed. Unsupported hardware commands return errors. Firmware updates use **SWD**, not OTA.
 - The included BLE uploader uses `py-opendisplay` 7.14.1 (compatible with Python 3.11/3.12)
   for discovery, protocol, compression and refresh confirmation. The helper exposes unauthenticated raw/compressed uploads.
@@ -58,13 +58,16 @@ uv creates and manages the Python environment; manual venv activation is unneces
 
 Build products are in `build/zephyr/`: `zephyr.hex`, `zephyr.bin`, `zephyr.elf`, and
 `zephyr.map`. The build checks Flash/RAM bounds and the reset vector automatically.
-GitHub Actions builds both default and experimental panel-sleep variants, runs host tests,
+GitHub Actions builds both default deep-sleep and power-off comparison variants, runs host tests,
 and retains build artifacts; a successful CI run is not a hardware certification.
 
-The locally tested Arm GNU 15.3.Rel1 build uses **95,788 B Flash / 16,336 B RAM**.
+The default uses global **`-O2` + LTO**, with unused system features removed.
+GCC 15.3.1 produces **120,596 B Flash / 16,360 B RAM**; see build output for your toolchain.
+The build script also applies a pinned Zephyr fix to omit ATT address formatting when logging is disabled.
+See [system trimming and hardware measurements](docs/system-trimming-2026-09-12.md).
 The application has 126 KiB Flash; the final 2 KiB hold two configuration transaction slots.
-Only **48 B of RAM remains outside reserved stacks and buffers**. After the encrypted hardware regression, unused stack prefixes were 252 B (main)
-and 380 B (system workqueue); these are observed margins, not worst-case proofs. There is no full-frame MCU buffer or dynamic heap.
+Only **24 B of RAM remains outside reserved stacks and buffers**; this is not the free space inside thread stacks.
+There is no full-frame MCU buffer or dynamic heap. Observed stack watermarks are not worst-case proofs.
 
 ## Flash and upload
 
@@ -98,14 +101,25 @@ The protocol reference is OpenDisplay/Firmware commit
 | PIPE | Negotiated window and ACK interval both 1; duplicate suppression and SACK |
 | Configuration | Up to 768 bytes, CRC validation, two-slot Flash commit |
 | Authentication | CMAC mutual authentication, CCM frames, replay checks and expiry; disabled by default |
-| Advertising | 160 ms for the initial 10 seconds, then 1 second; transition deferred while connected |
+| Advertising | 100–150 ms for 30 seconds after startup or disconnect, then exactly 1 second; transition deferred while connected |
 | Idle connection | Disconnect after 120 seconds without accepted business commands |
 | Incomplete transfer | Abort after 30 seconds of application inactivity |
-| Telemetry | One-minute advertising heartbeat; temperature sampled at most every five minutes |
+| Telemetry | Temperature + internal VDD at boot, fast-window end, every five minutes while disconnected, and valid `00 44` requests after any configured authentication |
 
-The panel is powered off on startup and after refresh. Experimental `07 A5` panel
-sleep can be built with `--epd-deep-sleep`; it is **off by default** pending T5 validation.
-Building again without the flag restores the default. CPU idle uses Zephyr event waits;
+The panel enters `07 A5` deep sleep after successful power-off at startup and after
+refresh. RESET wakes it before the next transfer; a BUSY timeout never sends deep
+sleep prematurely. Build `--no-epd-deep-sleep` for a power-off-only comparison.
+Repeated wake/refresh and current consumption of this new default still need T5 hardware validation.
+
+Telemetry uses OpenDisplay half-degree temperature and 9-bit voltage in 10 mV
+units, preserving boot/security flags and all other MSD bytes. Failed sampling
+retains the complete previous snapshot; a failed `00 44` sample returns NACK.
+The ADC stops and disables after sampling or a 50 ms timeout. TEMP uses Zephyr's
+existing sensor driver to serialize with RC-clock calibration and stop the
+peripheral; a stalled driver wait is recovered by the 180-second watchdog.
+Idle watchdog feeding remains bounded at 60 seconds without a one-minute
+advertising heartbeat. VDD is a battery proxy, not a calibrated capacity reading.
+CPU idle uses Zephyr event waits;
 System OFF is not used because this board lacks a practical wake source.
 
 ## Repository layout
