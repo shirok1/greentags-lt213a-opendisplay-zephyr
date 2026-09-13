@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static unsigned pins[32], resets, bits, byte;
+static unsigned pins[32], resets, bits, byte, selections;
 static bool input_connected, stuck;
 static int64_t now;
 static struct { unsigned value, data; } wire[12000];
@@ -13,14 +13,17 @@ static unsigned count;
 void nrf_gpio_pin_write(unsigned pin, unsigned value)
 {
     if (pin == 3 && pins[pin] && !value) { resets++; }
+    if (pin == 1 && pins[pin] && !value) { selections++; }
     if (pin == 0 && !pins[pin] && value && !pins[1]) {
         byte = (byte << 1) | pins[30]; bits++;
+        if (bits == 8) {
+            assert(count < 12000);
+            wire[count].value = byte; wire[count++].data = pins[2];
+            bits = byte = 0;
+        }
     }
-    if (pin == 1 && !pins[pin] && value && bits) {
-        assert(bits == 8 && count < 12000);
-        wire[count].value = byte; wire[count++].data = pins[2];
-        bits = byte = 0;
-    }
+    if (pin == 1 && !pins[pin] && value) { assert(bits == 0); }
+    if (pin == 2 && pins[pin] != value) { assert(bits == 0); }
     pins[pin] = value;
 }
 void nrf_gpio_cfg_output(unsigned pin) { (void)pin; }
@@ -66,10 +69,15 @@ int main(void)
     check_idle();
     unsigned previous = count;
     assert(!epd_off() && count == previous); /* no SPI access to sleeping panel */
+    int64_t begin_at = now;
+    unsigned select_at = selections;
     assert(!epd_begin() && resets == 2 && input_connected);
+    assert(now - begin_at < 100); /* Ready panel: no 200 ms fixed tail. */
+    assert(selections - select_at < 64); /* Old plane is one SPI burst. */
     assert(has_command(previous, 0x04) && has_command(previous, 0x13));
     uint8_t pixels[] = {0xaa, 0x55};
     assert(!epd_write(pixels, sizeof(pixels)));
+    assert(pins[1] == 1 && pins[0] == 0);
     assert(wire[count - 2].data && wire[count - 2].value == 0xaa);
     previous = count;
     assert(!epd_finish(0) && has_command(previous, 0x12));

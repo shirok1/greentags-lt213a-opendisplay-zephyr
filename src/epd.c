@@ -19,10 +19,8 @@ static int gpio_pin_get_dt(const struct pin *pin)
 { return (nrf_gpio_pin_read(pin->number) != 0) != pin->inverted; }
 
 /* GPIO operations do not mask interrupts: BLE radio deadlines take priority. */
-static void byte_out(uint8_t value, bool data)
+static void shift_out(uint8_t value)
 {
-    gpio_pin_set_dt(&dc, data);
-    gpio_pin_set_dt(&cs, 1);
     for (unsigned int i = 0; i < 8; i++) {
         gpio_pin_set_dt(&sck, 0);
         gpio_pin_set_dt(&mosi, (value & 0x80) != 0);
@@ -32,6 +30,12 @@ static void byte_out(uint8_t value, bool data)
         value <<= 1;
     }
     gpio_pin_set_dt(&sck, 0);
+}
+static void byte_out(uint8_t value, bool data)
+{
+    gpio_pin_set_dt(&dc, data);
+    gpio_pin_set_dt(&cs, 1);
+    shift_out(value);
     gpio_pin_set_dt(&cs, 0);
 }
 
@@ -41,6 +45,9 @@ static void data(uint8_t value) { byte_out(value, true); }
  * Testing two 100-frame partial passes (white, then target) on this panel. Keep the
  * timing identical in all five LUTs. Calibrate against the actual panel. */
 #define PARTIAL_DRIVE_FRAMES 100
+/* BUSY high permits the next operation (panel spec, update flow).
+ * Keep a small board settling margin; tune here if a panel needs longer. */
+#define READY_SETTLE_MS 10
 static bool partial;
 static bool awake;
 static size_t plane_bytes, plane_written;
@@ -63,7 +70,7 @@ static int wait_ready(void)
         cmd(0x71);
         int active = gpio_pin_get_dt(&busy); /* logical 1 = physical LOW */
         if (active < 0) { return active; }
-        if (!active) { k_msleep(200); return 0; }
+        if (!active) { k_msleep(READY_SETTLE_MS); return 0; }
         if (k_uptime_get() >= deadline) { return -ETIMEDOUT; }
         k_msleep(10);
     }
@@ -100,7 +107,10 @@ static int panel_begin(bool region)
     if (region) { return 0; }
     cmd(0x50); data(0x97);
     cmd(0x10);
-    for (size_t i = 0; i < EPD_FRAME_BYTES; i++) { data(0xff); }
+    gpio_pin_set_dt(&dc, 1);
+    gpio_pin_set_dt(&cs, 1);
+    for (size_t i = 0; i < EPD_FRAME_BYTES; i++) { shift_out(0xff); }
+    gpio_pin_set_dt(&cs, 0);
     cmd(0x13);
     return 0;
 }
@@ -135,12 +145,21 @@ int epd_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 
 int epd_write(const uint8_t *bytes, size_t len)
 {
+    if (!len) { return 0; }
+    gpio_pin_set_dt(&dc, 1);
+    gpio_pin_set_dt(&cs, 1);
     for (size_t i = 0; i < len; i++) {
-        if (partial && plane_written == plane_bytes) { cmd(0x13); }
+        if (partial && plane_written == plane_bytes) {
+            gpio_pin_set_dt(&cs, 0);
+            cmd(0x13);
+            gpio_pin_set_dt(&dc, 1);
+            gpio_pin_set_dt(&cs, 1);
+        }
         /* T5 register LUT expects the inverse of OpenDisplay wire pixels. */
-        data(partial ? (uint8_t)~bytes[i] : bytes[i]);
+        shift_out(partial ? (uint8_t)~bytes[i] : bytes[i]);
         if (partial) { plane_written++; }
     }
+    gpio_pin_set_dt(&cs, 0);
     return 0;
 }
 
