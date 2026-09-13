@@ -1,11 +1,11 @@
 #include "protocol.h"
 #include "config_store.h"
 #include "security.h"
+#include "telemetry.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/random/random.h>
 #include <hal/nrf_ficr.h>
 #include <hal/nrf_wdt.h>
@@ -70,29 +70,23 @@ static struct bt_data scan_response[] = {
     BT_DATA(BT_DATA_NAME_COMPLETE, NULL, 8),
 };
 
-/* OpenDisplay's Bluefruit setInterval(fast, slow) selects two phases,
- * not an advertising min/max range: 160 ms for 10 s, then 1000 ms.
- * Keep the Zephyr min/max equal within each phase. */
+/* Shared Mynewt/Zephyr profile: fast 100–150 ms for 30 s, slow 1 s. */
 static int advertise(bool fast)
 {
-    uint16_t interval = fast ? 256 : 1600;
     return bt_le_adv_start(BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONNECTABLE,
-                           interval, interval, NULL),
+                           fast ? 160 : 1600, fast ? 240 : 1600, NULL),
                            advertising, ARRAY_SIZE(advertising),
                            scan_response, ARRAY_SIZE(scan_response));
 }
 
 #define LINK_IDLE_MS 120000
+#define TELEMETRY_MS 300000
+#define FAST_ADV_MS 30000
 
-static void read_temperature(void)
+static int sample_msd(void *ctx)
 {
-    const struct device *sensor = DEVICE_DT_GET_ONE(nordic_nrf_temp);
-    struct sensor_value value;
-    if (device_is_ready(sensor) && !sensor_sample_fetch(sensor) &&
-        !sensor_channel_get(sensor, SENSOR_CHAN_DIE_TEMP, &value)) {
-        int half_degrees = (value.val1 + 40) * 2 + value.val2 / 500000;
-        msd[13] = CLAMP(half_degrees, 0, 255);
-    }
+    ARG_UNUSED(ctx);
+    return od_read_msd(msd);
 }
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -241,7 +235,7 @@ int main(void)
     if (od_security_enabled()) { msd[15] |= BIT(3); }
     int err = epd_init();
     if (err) { return err; }
-    read_temperature();
+    (void)od_read_msd(msd);
     err = bt_enable(NULL);
     if (err) { return err; }
     /* Match upstream nRF names: OD + DEVICEID[1]'s low 24 bits. */
@@ -257,22 +251,27 @@ int main(void)
     err = advertise(true);
     if (err) { return err; }
     bool fast_advertising = true;
-    int64_t slow_adv_at = k_uptime_get() + 10000;
+    bool restart_advertising = false;
+    int64_t retry_adv_at = 0;
+    int64_t slow_adv_at = k_uptime_get() + FAST_ADV_MS;
     atomic_val_t current = -1;
     int64_t last_packet = k_uptime_get();
     int64_t last_activity = last_packet;
     int64_t last_telemetry = k_uptime_get();
-    int64_t last_temperature = last_telemetry;
     for (;;) {
         nrf_wdt_reload_request_set(NRF_WDT, NRF_WDT_RR0);
         struct command command;
         const struct od_io io = { .send = send_response, .begin = begin,
             .write = write_panel, .finish = finish, .abort = abort_panel,
-            .reboot = reboot, .ctx = &command, .msd = msd, .region = region };
+            .reboot = reboot, .ctx = &command, .msd = msd, .region = region,
+            .sample_msd = sample_msd };
         int64_t now = k_uptime_get();
-        int64_t deadline = last_telemetry + 60000;
+        /* Bound watchdog feeding independently of the five-minute telemetry. */
+        int64_t deadline = now + 60000;
+        if (!atomic_get(&link_up)) { deadline = MIN(deadline, last_telemetry + TELEMETRY_MS); }
         if (protocol.active || od_config_writing()) { deadline = MIN(deadline, last_packet + 30000); }
         if (atomic_get(&link_up)) { deadline = MIN(deadline, last_activity + LINK_IDLE_MS); }
+        else if (restart_advertising) { deadline = MIN(deadline, retry_adv_at); }
         else if (fast_advertising) { deadline = MIN(deadline, slow_adv_at); }
         /* No one-second polling. Connection callbacks wake this wait even
          * when the command queue is full, so disconnect cleanup is prompt. */
@@ -292,27 +291,40 @@ int main(void)
                 od_security_reset(&security);
                 last_packet = now;
                 last_activity = now;
+                if (current != -1 && !atomic_get(&link_up)) {
+                    /* Stop Zephyr's automatically resumed legacy advertiser
+                     * and restart the fast window after every disconnect. */
+                    fast_advertising = true;
+                    slow_adv_at = now + FAST_ADV_MS;
+                    restart_advertising = true;
+                    retry_adv_at = now;
+                }
             }
             current = next;
         }
-        if (fast_advertising && !atomic_get(&link_up) && now >= slow_adv_at) {
-            /* A connection may race this transition. Never disconnect it;
-             * retry after its disconnect or a bounded delay on an HCI error. */
+        if (!atomic_get(&link_up) &&
+            ((restart_advertising && now >= retry_adv_at) ||
+             (!restart_advertising && fast_advertising && now >= slow_adv_at))) {
+            /* Retry transient HCI errors without ending the fast window early.
+             * A connection may race stop/start; never disconnect that peer. */
+            bool fast = now < slow_adv_at;
+            if (!fast && fast_advertising && last_telemetry < slow_adv_at) {
+                (void)od_read_msd(msd);
+                last_telemetry = now;
+            }
             int adv_err = bt_le_adv_stop();
             if (!adv_err && !atomic_get(&link_up)) {
-                adv_err = advertise(false);
-                if (!adv_err) { fast_advertising = false; }
+                adv_err = advertise(fast);
+                if (!adv_err) { fast_advertising = fast; }
             }
-            slow_adv_at = k_uptime_get() + 5000;
+            restart_advertising = adv_err != 0;
+            retry_adv_at = k_uptime_get() + 5000;
         }
-        if (now - last_telemetry >= 60000) {
-            if (!protocol.active && now - last_temperature >= 300000) {
-                read_temperature();
-                last_temperature = now;
+        if (!atomic_get(&link_up) && now - last_telemetry >= TELEMETRY_MS) {
+            if (!od_read_msd(msd)) {
+                (void)bt_le_adv_update_data(advertising, ARRAY_SIZE(advertising),
+                                           scan_response, ARRAY_SIZE(scan_response));
             }
-            msd[15] += 0x10; /* liveness nibble; preserve status bits */
-            (void)bt_le_adv_update_data(advertising, ARRAY_SIZE(advertising),
-                                       scan_response, ARRAY_SIZE(scan_response));
             last_telemetry = now;
         }
         if (!received) {
@@ -325,7 +337,7 @@ int main(void)
                     msd[15] = (msd[15] & ~BIT(3)) | (od_security_enabled() ? BIT(3) : 0);
                     (void)bt_le_adv_update_data(advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
                 }
-                if (command.data[0] == 0 && command.data[1] == 0x44 && !err) {
+                if (command.data[0] == 0 && command.data[1] == 0x44 && command.size == 2 && command.accepted && !err) {
                     msd[15] &= ~BIT(1);
                     (void)bt_le_adv_update_data(advertising, ARRAY_SIZE(advertising),
                                                scan_response, ARRAY_SIZE(scan_response));

@@ -153,7 +153,7 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
         return io->send(io->ctx, response, sizeof(response));
     }
     case 0x44: {
-        if (size) { return reply(io, cmd, false); }
+        if (size || (io->sample_msd && io->sample_msd(io->ctx))) { return reply(io, cmd, false); }
         uint8_t response[18] = {0, 0x44};
         memcpy(response + 2, io->msd, 16);
         return io->send(io->ctx, response, sizeof(response));

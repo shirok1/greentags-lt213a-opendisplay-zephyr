@@ -36,7 +36,9 @@ static int region(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 { (void)ctx; assert(x + w <= 104 && y + h <= 212); written = 0; panel_expected = (w / 8) * h * 2; return 0; }
 static void abort_panel(void *ctx) { (void)ctx; aborts++; }
 static void reboot(void *ctx) { (void)ctx; reboots++; }
-static const struct od_io io = {send, begin, write_data, finish, abort_panel, reboot, NULL, msd, region};
+static int samples, fail_sample;
+static int sample_msd(void *ctx) { (void)ctx; samples++; return fail_sample; }
+static const struct od_io io = {send, begin, write_data, finish, abort_panel, reboot, NULL, msd, sample_msd, region};
 
 static void command(uint8_t cmd, const uint8_t *payload, size_t size, bool ok)
 {
@@ -253,6 +255,13 @@ int main(void)
     fclose(out);
     command(0x44, NULL, 0, true);
     assert(sizes[0] == 18 && !memcmp(response[0] + 2, msd, 16));
+    assert(samples == 1);
+    command(0x44, zero, 1, false);
+    assert(samples == 1); /* Malformed requests must not sample. */
+    fail_sample = 1;
+    command(0x44, NULL, 0, false);
+    assert(samples == 2 && sizes[0] == 2);
+    fail_sample = 0;
     command(0x50, NULL, 0, true);
     assert(response[0][2] == 3);
     command(0x41, zero, 1, false);

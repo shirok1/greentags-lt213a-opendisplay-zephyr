@@ -22,6 +22,7 @@ struct od_io {
     void (*reboot)(void *ctx);
     void *ctx;
     const uint8_t *msd;
+    int (*sample_msd)(void *ctx);
     int (*region)(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 };
 
