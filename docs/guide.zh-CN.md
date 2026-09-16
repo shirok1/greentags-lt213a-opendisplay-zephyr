@@ -109,12 +109,15 @@ PIPE **协商窗口 W=1、确认间隔 N=1**，客户端必须遵守协商值。
 
 ## SWD 与上传工具
 
-使用 J-Link，连接 SWDIO、SWCLK、GND 和目标电压参考。以下命令整片擦除，
+安装 OpenOCD，使用 CMSIS-DAP，连接 SWDIO、SWCLK、GND 和目标电压参考。
+默认刷入和调试使用 OpenOCD + CMSIS-DAP，SWD 频率为 10000 kHz（10 MHz）。
+已有构建若仍默认使用 J-Link，先执行 `uv run --locked python scripts/build.py --pristine` 重新生成配置。
+以下命令整片擦除，
 包括已保存配置；需要原厂固件时先备份。本项目已通过 CMSIS-DAP / probe-rs 烧录并验证全屏刷图。
 
 ```sh
 export ZEPHYR_BASE="$PWD/.deps/zephyr"
-uv run --locked west flash -d build -r jlink --erase --reset
+uv run --locked west flash -d build --cmd-pre-load "reset halt" --cmd-pre-load "nrf5 mass_erase" --verify
 uv run --locked python scripts/upload.py scan
 uv run --locked python scripts/upload.py upload '扫描得到的地址'
 uv run --locked python scripts/upload.py upload '扫描得到的地址' picture.png --compress

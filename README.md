@@ -71,17 +71,23 @@ There is no full-frame MCU buffer or dynamic heap. Observed stack watermarks are
 
 ## Flash and upload
 
-Connect J-Link using SWDIO, SWCLK, GND, and target voltage reference.
+Install OpenOCD and connect a CMSIS-DAP probe using SWDIO, SWCLK, GND, and target
+voltage reference. The default flash/debug runner is OpenOCD with CMSIS-DAP at
+10000 kHz (10 MHz). Rebuild with `uv run --locked python scripts/build.py --pristine` if
+your existing build still defaults to J-Link.
 The following command **erases the chip, including saved configuration**; back up any
 firmware/configuration you need first. No device is flashed by build or test scripts.
 
 ```sh
 export ZEPHYR_BASE="$PWD/.deps/zephyr"
-uv run --locked west flash -d build -r jlink --erase --reset
+uv run --locked west flash -d build --cmd-pre-load "reset halt" --cmd-pre-load "nrf5 mass_erase" --verify
 uv run --locked python scripts/upload.py scan
 uv run --locked python scripts/upload.py upload 'DEVICE_ADDRESS'
 uv run --locked python scripts/upload.py upload 'DEVICE_ADDRESS' picture.png --compress
 ```
+
+OpenOCD resets and starts the firmware after flashing. J-Link remains available
+with `uv run --locked west flash -d build -r jlink --erase --reset`.
 
 Use the address reported by scanning (a peripheral UUID on macOS). Omitting the image
 uploads an orientation/checkerboard pattern. Images are fitted to 104 × 212 and converted
