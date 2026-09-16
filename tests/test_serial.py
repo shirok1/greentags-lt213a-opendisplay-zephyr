@@ -19,7 +19,8 @@ import set_serial
 async def check():
     original = parse_config_response(Path('build/secure-config.bin').read_bytes())
     original.data_extended = DataExtended.from_strings(
-        serial_number='old', friendly_name='Shelf 7', custom_string_1='18111')
+        serial_number='old', friendly_name='Shelf 7', custom_string_1='18111',
+        custom_string_3='lt213a.partial_frames=160')
     original_bytes = serialize_config(original)
     for serial in ('2402859c', ''):
         expected = copy.deepcopy(original)

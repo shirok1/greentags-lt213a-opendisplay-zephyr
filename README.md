@@ -62,7 +62,7 @@ GitHub Actions builds both default deep-sleep and power-off comparison variants,
 and retains build artifacts; a successful CI run is not a hardware certification.
 
 The default uses global **`-O2` + LTO**, with unused system features removed.
-GCC 15.3.1 produces **120,900 B Flash / 16,376 B RAM**; see build output for your toolchain.
+GCC 15.3.1 produces **121,036 B Flash / 16,376 B RAM**; see build output for your toolchain.
 The build script also applies a pinned Zephyr fix to omit ATT address formatting when logging is disabled.
 See [system trimming and hardware measurements](docs/system-trimming-2026-09-12.md).
 The application has 126 KiB Flash; the final 2 KiB hold two configuration transaction slots.
@@ -106,6 +106,18 @@ address. Unreadable tags are marked unknown, never mistaken for unset serials.
 The script backs up the current configuration, changes only `serial_number`, and reconnects
 to verify the result. The firmware advertises `OD2402859c`; use `--clear` to restore the
 chip-derived name. See [serial naming, length limits and authenticated devices](docs/ble-name.md).
+
+Partial-refresh drive frames are configurable (default 100, range 1–255):
+
+```sh
+uv run --locked python scripts/set_partial_frames.py                      # scan and select
+uv run --locked python scripts/set_partial_frames.py 'DEVICE_ADDRESS' 160 # set and verify
+uv run --locked python scripts/set_partial_frames.py 'DEVICE_ADDRESS' --reset
+```
+
+The setting persists in `DataExtended.custom_string_3` as `lt213a.partial_frames=160`
+and takes effect on the next partial refresh. It requires firmware containing this extension;
+older firmware can store the string without using it. See [frame configuration and measurements](docs/partial-t5.md).
 
 ## Protocol and power behavior
 

@@ -1,5 +1,41 @@
 # T5 局部刷新实测（2026-09-08）
 
+## 可配置驱动帧数（2026-09-16）
+
+固件现在从OD配置读取局刷帧数，默认仍为100，不必为每个数值重新编译。首次需要烧录包含本扩展的固件；老固件即使保存同一个字符串也不会改变波形。
+
+```sh
+# 一体入口：扫描现有设备，按编号选板子，再输入帧数
+uv run --locked python scripts/set_partial_frames.py
+# 查询 / 设置 / 恢复默认
+uv run --locked python scripts/set_partial_frames.py DEVICE_ADDRESS
+uv run --locked python scripts/set_partial_frames.py DEVICE_ADDRESS 160
+uv run --locked python scripts/set_partial_frames.py DEVICE_ADDRESS --reset
+```
+
+- 存储位置：标准`DataExtended`（TLV `0x2C`）的`custom_string_3`，内容为`lt213a.partial_frames=160`。这是本项目的字符串约定，没有新增TLV或占用官方保留字节。
+- 支持整数1–255，表示五张局刷LUT中对应驱动阶段的帧数；不改变阶段次序、过渡方向、电压、PLL或全刷波形。数值越大通常耗时越长，画质需实物确认。1–255是寄存器可表达范围，不代表每个值都完成了光学/全温区验证。
+- 每次`epd_region()`读取一次已提交配置，并将相同帧数写入五张LUT。修改在下一次局刷生效，无需重启；不会影响已经开始的刷新。掉电保留，清除设置/恢复默认时回到100。
+- 缺少扩展包、空值、不相关字符串、非十进制内容、0或超过255均按100处理，不使整个配置失效。
+- 脚本保留serial、安全配置和其他字段，写入前以0600权限备份完整配置到`build/partial-frame-backups/`，重连逐字节验证。若`custom_string_3`已有其他内容，则拒绝覆盖；`--reset`同样不清除别人的字段。可用`--key-file PATH`提供原始16字节认证密钥。
+
+### 本次验证
+
+调试器当前连接的板为`OD84F6BD`（DEVICEID[1]=e284f6bd），与此前序列号测试的`OD6935B2`不同。完整Flash先备份到`build/partial-frames/before-flash.bin`，烧录带verify通过。构建121036 B Flash / 16376 B RAM，比0.3.0基线增加136 B Flash，RAM不变。
+
+对同一全屏基准、相同32×15局部窗口执行100和160帧测试：
+
+| 配置 | 显式END到刷新完成通知 |
+|---|---:|
+| 100帧 | 2.187 s |
+| 160帧 | 3.387 s |
+
+160帧配置在SWD复位后仍正确读回并用于刷新。此测量包含BLE、刷新和关电，不是示波器的纯BUSY时长；窗口旧/新像素相同，仅用于隔离时序变化，未据此评价残影。测试后已完整恢复原配置（有效帧数100），屏幕留下黑白测试图。日志`build/partial-frames/hardware.log`，可用`tests/test_partial_frames_hardware.py DEVICE_ADDRESS`复现。
+
+主机回归覆盖持久化、无配置/非法值回退、其他custom字段内容、UTF-8序列号与安全配置保留；真实配置存储接入虚拟GPIO驱动后，逐字节确认1/100/160/255均写入全部五张LUT，深睡开关两种构建均通过。录入工具还验证配置备份及交互等待期间的并发改动检测。现有serial录入工具的回归同时检查不会丢失帧数设置。
+
+## 以下为2026-09-08的波形调试记录
+
 最新状态：用户确认“局部刷白 100 帧，再写目标 100 帧”比单次 160 帧更干净、笔画正常。两步共约 5.77 秒，当前固件为每次 100 帧；两步策略由测试脚本 --white-first 发起，普通客户端仍是一次标准局部刷新。下文保留调试过程。
 
 驱动依据用户提供的 `A-GDEW0213T5-201021/GDEW0213T5_Arduino_P20201021/GDEW0213T5_Arduino_P/` 内 Arduino 示例和 `Ap_29demo.h`，不再沿用 T5D 波形。
