@@ -27,6 +27,13 @@ Keep changes focused. Explain the behavior change, memory impact, validation per
 and any remaining hardware uncertainty in your pull request. Preserve third-party
 attribution. Do not reformat vendored sources as part of unrelated changes.
 
+## Documentation
+
+Use the [documentation index](docs/README.md) to find the topic affected by a change.
+Explain current behavior, design tradeoffs and validation limits in that topic. Keep
+experiment conditions with any measurements; avoid appending chronological task reports
+or treating old build measurements as current guarantees.
+
 ## Hardware reports
 
 Include chip marking/revision, panel model, supply voltage, toolchain versions,
