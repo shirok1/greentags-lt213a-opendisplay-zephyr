@@ -62,11 +62,11 @@ GitHub Actions builds both default deep-sleep and power-off comparison variants,
 and retains build artifacts; a successful CI run is not a hardware certification.
 
 The default uses global **`-O2` + LTO**, with unused system features removed.
-GCC 15.3.1 produces **120,596 B Flash / 16,360 B RAM**; see build output for your toolchain.
+GCC 15.3.1 produces **120,900 B Flash / 16,376 B RAM**; see build output for your toolchain.
 The build script also applies a pinned Zephyr fix to omit ATT address formatting when logging is disabled.
 See [system trimming and hardware measurements](docs/system-trimming-2026-09-12.md).
 The application has 126 KiB Flash; the final 2 KiB hold two configuration transaction slots.
-Only **24 B of RAM remains outside reserved stacks and buffers**; this is not the free space inside thread stacks.
+Only **8 B of RAM remains outside reserved stacks and buffers**; this is not the free space inside thread stacks.
 There is no full-frame MCU buffer or dynamic heap. Observed stack watermarks are not worst-case proofs.
 
 ## Flash and upload
@@ -92,6 +92,16 @@ with `uv run --locked west flash -d build -r jlink --erase --reset`.
 Use the address reported by scanning (a peripheral UUID on macOS). Omitting the image
 uploads an orientation/checkerboard pattern. Images are fitted to 104 × 212 and converted
 to monochrome. Scan for at least eight seconds when using slow advertising.
+
+To identify a tag by its printed serial, save it in OpenDisplay's existing configuration:
+
+```sh
+uv run --locked python scripts/set_serial.py 'DEVICE_ADDRESS' 2402859c
+```
+
+The script backs up the current configuration, changes only `serial_number`, and reconnects
+to verify the result. The firmware advertises `OD2402859c`; use `--clear` to restore the
+chip-derived name. See [serial naming, length limits and authenticated devices](docs/ble-name.md).
 
 ## Protocol and power behavior
 
