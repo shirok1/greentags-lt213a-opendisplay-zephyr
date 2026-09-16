@@ -55,6 +55,6 @@ with tempfile.TemporaryDirectory(prefix="lt213a-epd-") as directory:
         binary = temporary / f"test-epd-{enabled}"
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-fsanitize=address,undefined", f"-DCONFIG_LT213A_EPD_DEEP_SLEEP={enabled}",
-            "-Isrc", f"-I{temporary}", "src/epd.c", "tests/test_epd.c", "-o", str(binary)],
+            "-Isrc", f"-I{temporary}", "src/epd.c", "src/config_store.c", "tests/test_epd.c", "-o", str(binary)],
             cwd=root, check=True)
         subprocess.run([str(binary)], check=True)

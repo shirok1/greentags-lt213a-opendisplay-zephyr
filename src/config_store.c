@@ -103,6 +103,24 @@ static const uint8_t *config_packet(uint8_t type)
 
 const uint8_t *od_config_security(void) { return config_packet(39); }
 
+uint8_t od_config_partial_frames(void)
+{
+    const uint8_t *extended = config_packet(44);
+    if (!extended) { return OD_PARTIAL_FRAMES_DEFAULT; }
+    /* DataExtended.custom_string_3; leave unrelated user strings untouched. */
+    const char *value = (const char *)extended + 8 * 32;
+    const size_t prefix = sizeof(OD_PARTIAL_FRAMES_KEY) - 1;
+    if (strncmp(value, OD_PARTIAL_FRAMES_KEY, prefix)) { return OD_PARTIAL_FRAMES_DEFAULT; }
+    value += prefix;
+    unsigned frames = 0;
+    for (; *value; value++) {
+        if (*value < '0' || *value > '9') { return OD_PARTIAL_FRAMES_DEFAULT; }
+        frames = frames * 10 + (*value - '0');
+        if (frames > 255) { return OD_PARTIAL_FRAMES_DEFAULT; }
+    }
+    return frames ? frames : OD_PARTIAL_FRAMES_DEFAULT;
+}
+
 size_t od_config_name(char name[OD_NAME_MAX + 1], uint32_t chip_id)
 {
     name[0] = 'O'; name[1] = 'D';

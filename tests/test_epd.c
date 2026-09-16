@@ -1,5 +1,6 @@
 /* Exercise the actual bit-banged driver with a virtual panel/GPIO clock. */
 #include "epd.h"
+#include "fake_flash.h"
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -62,8 +63,31 @@ static void check_idle(void)
     assert(pins[1] == 1 && pins[3] == 1 && pins[0] == 0 && pins[30] == 0 && pins[2] == 0 && pins[5] == 0);
     assert(input_connected == !CONFIG_LT213A_EPD_DEEP_SLEEP);
 }
+
+static void configure_frames(unsigned frames)
+{
+    assert(!od_config_clear());
+    size_t len;
+    const uint8_t *base = od_config_get(&len);
+    uint8_t config[512] = {0};
+    memcpy(config, base, len - 2);
+    config[len - 1] = 44;
+    snprintf((char *)config + len + 256, 32, OD_PARTIAL_FRAMES_KEY "%u", frames);
+    len += 290;
+    uint16_t crc = 0xffff;
+    for (size_t i = 0; i < len - 2; i++) {
+        crc ^= (uint16_t)(i < 2 ? 0 : config[i]) << 8;
+        for (unsigned b = 0; b < 8; b++) { crc = (crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0); }
+    }
+    config[0] = len; config[1] = len >> 8;
+    config[len - 2] = crc; config[len - 1] = crc >> 8;
+    assert(!od_config_start(len) && !od_config_append(config, len));
+    od_config_init(&fake_flash);
+}
+
 int main(void)
 {
+    fake_init();
     assert(!epd_init());
     assert(resets == 1 && has_command(0, 0x02));
     assert(has_command(0, 0x07) == !!CONFIG_LT213A_EPD_DEEP_SLEEP);
@@ -118,6 +142,19 @@ int main(void)
     check_register(0x13, (uint8_t[]){0, 0xff, 0xaa, 0x55}, 4);
     assert(!epd_finish(2));
     check_idle();
+    /* Persisted configuration changes all five actual SPI LUTs next time. */
+    const unsigned frame_counts[] = {160, 1, 255, 100};
+    for (unsigned n = 0; n < sizeof(frame_counts) / sizeof(frame_counts[0]); n++) {
+        configure_frames(frame_counts[n]);
+        count = 0;
+        assert(!epd_region(8, 3, 16, 2));
+        for (unsigned i = 0; i < 5; i++) {
+            uint8_t lut[44] = {transitions[i], 1, frame_counts[n], 0, 0, 1};
+            check_register(0x20 + i, lut, i ? 42 : 44);
+        }
+        assert(!epd_write(planes, sizeof(planes)) && !epd_finish(2));
+        check_idle();
+    }
     /* A timeout cannot mark the panel asleep or issue deep sleep prematurely. */
     count = 0; stuck = true;
     assert(epd_begin() < 0 && !has_command(0, 7) && input_connected);
@@ -125,4 +162,5 @@ int main(void)
     assert(!epd_off() && has_command(0, 2));
     check_idle();
     puts("Panel power lifecycle passed: boot, repeated off, reset wake, refresh, timeout recovery");
+    puts("Configured partial frames passed: committed config -> all five SPI LUTs, 1/100/160/255");
 }

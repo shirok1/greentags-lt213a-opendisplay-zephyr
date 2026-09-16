@@ -2,6 +2,7 @@
  * Four-wire, mode-0, MSB-first SPI; BS=0. No readback on bidirectional SDA.
  */
 #include "epd.h"
+#include "config_store.h"
 #include <zephyr/devicetree.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <hal/nrf_gpio.h>
@@ -42,9 +43,8 @@ static void byte_out(uint8_t value, bool data)
 static void cmd(uint8_t value) { byte_out(value, false); }
 static void data(uint8_t value) { byte_out(value, true); }
 /* On this LT213A, the vendor's 14-frame phase left both transitions incomplete.
- * Testing two 100-frame partial passes (white, then target) on this panel. Keep the
- * timing identical in all five LUTs. Calibrate against the actual panel. */
-#define PARTIAL_DRIVE_FRAMES 100
+ * Default to the tested 100-frame phase; config can select 1..255 frames.
+ * Keep the timing identical in all five LUTs. Calibrate against the actual panel. */
 /* BUSY high permits the next operation (panel spec, update flow).
  * Keep a small board settling margin; tune here if a panel needs longer. */
 #define READY_SETTLE_MS 10
@@ -127,11 +127,12 @@ int epd_region(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
     cmd(0x82); data(0x08);
     cmd(0x50); data(0x47);
     const uint8_t transitions[] = {0x00, 0x00, 0x20, 0x10, 0x00};
+    const uint8_t frames = od_config_partial_frames();
     for (unsigned lut = 0; lut < 5; lut++) {
         cmd(0x20 + lut);
         unsigned count = lut == 0 ? 44 : 42;
         for (unsigned i = 0; i < count; i++) {
-            data(i == 0 ? transitions[lut] : i == 2 ? PARTIAL_DRIVE_FRAMES : (i == 1 || i == 5) ? 1 : 0);
+            data(i == 0 ? transitions[lut] : i == 2 ? frames : (i == 1 || i == 5) ? 1 : 0);
         }
     }
     cmd(0x91); cmd(0x90);

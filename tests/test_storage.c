@@ -76,4 +76,24 @@ int main(void)
     assert(!od_config_clear()); od_config_init(&fake_flash);
     assert(od_config_name(name, 0xa56935b2) == 8 && !strcmp(name, "OD6935B2"));
     puts("Serial naming passed: TLV ordering, persistence, empty/clear fallback and UTF-8 bounds");
+
+    assert(od_config_partial_frames() == 100);
+    uint8_t *setting = replacement + len - 2 - 32;
+    const struct { const char *value; unsigned frames; } cases[] = {
+        {"", 100}, {"unrelated note", 100}, {OD_PARTIAL_FRAMES_KEY "160", 160},
+        {OD_PARTIAL_FRAMES_KEY "1", 1}, {OD_PARTIAL_FRAMES_KEY "255", 255},
+        {OD_PARTIAL_FRAMES_KEY "0", 100}, {OD_PARTIAL_FRAMES_KEY "256", 100},
+        {OD_PARTIAL_FRAMES_KEY "", 100}, {OD_PARTIAL_FRAMES_KEY "-1", 100},
+        {OD_PARTIAL_FRAMES_KEY "100x", 100}, {OD_PARTIAL_FRAMES_KEY "999999999", 100},
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        memset(setting, 0, 32); memcpy(setting, cases[i].value, strlen(cases[i].value));
+        config_crc(replacement, len);
+        assert(!od_config_start(len) && !od_config_append(replacement, len));
+        od_config_init(&fake_flash);
+        assert(od_config_partial_frames() == cases[i].frames);
+        assert(od_config_security() && od_config_security()[0] == 1);
+    }
+    assert(!od_config_clear() && od_config_partial_frames() == 100);
+    puts("Partial frame settings passed: persistence, defaults, invalid values and unrelated metadata");
 }
