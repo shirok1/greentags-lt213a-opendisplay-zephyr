@@ -14,7 +14,7 @@ async def check():
     assert opendisplay_device.CHUNK_SIZE == 230
     assert opendisplay_device.MAX_START_PAYLOAD == 200
     version = parse_firmware_version(Path('build/test-version.bin').read_bytes())
-    assert version['major'] == 0 and version['minor'] == 3 and version['patch'] == 0
+    assert version['major'] == 0 and version['minor'] == 4 and version['patch'] == 0
     assert version['sha']
     pixels = bytes(i % 256 for i in range(2756))
     device = AsyncMock()
