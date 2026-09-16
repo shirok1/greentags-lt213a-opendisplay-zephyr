@@ -274,7 +274,7 @@ int main(void)
     assert(out && fwrite(config, 1, total, out) == total);
     fclose(out);
     command(0x43, NULL, 0, true);
-    assert(response[0][3] == 2 && response[0][4] > 0);
+    assert(response[0][2] == 0 && response[0][3] == 3 && response[0][4] > 0);
     assert(sizes[0] == 6 + response[0][4] && response[0][sizes[0] - 1] == 0);
     out = fopen("build/test-version.bin", "wb");
     assert(out && fwrite(response[0], 1, sizes[0], out) == sizes[0]);

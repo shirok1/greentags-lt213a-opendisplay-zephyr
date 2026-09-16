@@ -147,7 +147,7 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
         od_abort(p, io); return reply(io, cmd, !od_config_clear());
     case 0x43: {
         if (size) { return reply(io, cmd, false); }
-        uint8_t response[6 + sizeof(OD_BUILD_SHA) - 1] = {0, 0x43, 0, 2, sizeof(OD_BUILD_SHA) - 1};
+        uint8_t response[6 + sizeof(OD_BUILD_SHA) - 1] = {0, 0x43, 0, 3, sizeof(OD_BUILD_SHA) - 1};
         memcpy(response + 5, OD_BUILD_SHA, sizeof(OD_BUILD_SHA) - 1);
         /* Patch version follows the SHA; the zero initializer supplies it. */
         return io->send(io->ctx, response, sizeof(response));
