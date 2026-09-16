@@ -89,16 +89,43 @@ const uint8_t *od_config_get(size_t *len)
     *len = sizeof(od_config); return od_config;
 }
 
-const uint8_t *od_config_security(void)
+static const uint8_t *config_packet(uint8_t type)
 {
     size_t len; const uint8_t *p = od_config_get(&len);
     for (size_t pos = 3; pos < len - 2;) {
         uint8_t kind = p[pos + 1];
-        if (kind == 39) { return p + pos + 2; }
-        size_t size = kind == 4 ? 30 : kind == 32 ? 46 : kind == 44 ? 288 : 22;
+        if (kind == type) { return p + pos + 2; }
+        size_t size = kind == 4 ? 30 : kind == 32 ? 46 : kind == 39 ? 64 : kind == 44 ? 288 : 22;
         pos += size + 2;
     }
     return NULL;
+}
+
+const uint8_t *od_config_security(void) { return config_packet(39); }
+
+size_t od_config_name(char name[OD_NAME_MAX + 1], uint32_t chip_id)
+{
+    name[0] = 'O'; name[1] = 'D';
+    const uint8_t *extended = config_packet(44);
+    const char *serial = extended ? (const char *)extended + 64 : NULL;
+    if (serial && serial[0]) {
+        size_t len = strlen(serial); /* Validated 32-byte, NUL-terminated field. */
+        if (len > OD_NAME_MAX - 2) {
+            len = OD_NAME_MAX - 2;
+            /* Do not split a UTF-8 character at the advertising size limit. */
+            while (len && ((uint8_t)serial[len] & 0xc0) == 0x80) { len--; }
+        }
+        memcpy(name + 2, serial, len);
+        name[len + 2] = 0;
+        return len + 2;
+    }
+    /* Preserve the upstream nRF fallback: DEVICEID[1]'s low 24 bits. */
+    for (int i = 7; i >= 2; i--) {
+        name[i] = "0123456789ABCDEF"[chip_id & 0xf];
+        chip_id >>= 4;
+    }
+    name[8] = 0;
+    return 8;
 }
 
 bool od_config_writing(void) { return staging >= 0; }

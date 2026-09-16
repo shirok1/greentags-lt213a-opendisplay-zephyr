@@ -71,6 +71,19 @@ static struct bt_data scan_response[] = {
     BT_DATA(BT_DATA_NAME_COMPLETE, NULL, 8),
 };
 
+static int update_name(void)
+{
+    BUILD_ASSERT(CONFIG_BT_DEVICE_NAME_MAX == OD_NAME_MAX);
+    char name[OD_NAME_MAX + 1];
+    size_t len = od_config_name(name, NRF_FICR->DEVICEID[1]);
+    int err = bt_set_name(name);
+    if (!err) {
+        scan_response[0].data = (const uint8_t *)bt_get_name();
+        scan_response[0].data_len = len;
+    }
+    return err;
+}
+
 /* Shared Mynewt/Zephyr profile: fast 100–150 ms for 30 s, slow 1 s. */
 static int advertise(bool fast)
 {
@@ -252,16 +265,8 @@ int main(void)
     }
     err = bt_enable(NULL);
     if (err) { return err; }
-    /* Match upstream nRF names: OD + DEVICEID[1]'s low 24 bits. */
-    char name[] = "OD000000";
-    uint32_t chip_id = NRF_FICR->DEVICEID[1];
-    for (int i = 7; i >= 2; --i) {
-        name[i] = "0123456789ABCDEF"[chip_id & 0xf];
-        chip_id >>= 4;
-    }
-    err = bt_set_name(name);
+    err = update_name();
     if (err) { return err; }
-    scan_response[0].data = (const uint8_t *)bt_get_name();
     err = advertise(true);
     if (err) { return err; }
     bool fast_advertising = true;
@@ -349,6 +354,7 @@ int main(void)
                 if (old_config != od_config_get(&config_len)) {
                     od_security_reset(&security);
                     msd[15] = (msd[15] & ~BIT(3)) | (od_security_enabled() ? BIT(3) : 0);
+                    (void)update_name();
                     (void)bt_le_adv_update_data(advertising, ARRAY_SIZE(advertising), scan_response, ARRAY_SIZE(scan_response));
                 }
                 if (command.data[0] == 0 && command.data[1] == 0x44 && command.size == 2 && command.accepted && !err) {

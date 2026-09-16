@@ -2,6 +2,16 @@
 #include <assert.h>
 #include <stdio.h>
 
+static void config_crc(uint8_t *data, size_t len)
+{
+    uint16_t crc = 0xffff;
+    for (size_t i = 0; i < len - 2; i++) {
+        crc ^= (uint16_t)(i < 2 ? 0 : data[i]) << 8;
+        for (unsigned b = 0; b < 8; b++) { crc = (crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0); }
+    }
+    data[len - 2] = crc; data[len - 1] = crc >> 8;
+}
+
 int main(void)
 {
     fake_init(); size_t base_len; const uint8_t *base = od_config_get(&base_len);
@@ -39,4 +49,31 @@ int main(void)
     assert(!od_config_start(len) && od_config_append(replacement, len));
     od_config_init(&fake_flash); assert(!od_config_security());
     puts("Flash transactions passed: CRC rejection, aligned/unaligned chunks, reboot and 220 power cuts");
+
+    char name[OD_NAME_MAX + 1];
+    assert(od_config_name(name, 0xa56935b2) == 8 && !strcmp(name, "OD6935B2"));
+    /* Fixture puts DataExtended after SecurityConfig: exercise TLV traversal. */
+    uint8_t *serial = replacement + len - 2 - 288 + 64;
+    memcpy(serial, "2402859c", 9);
+    config_crc(replacement, len);
+    assert(!od_config_start(len) && !od_config_append(replacement, len));
+    od_config_init(&fake_flash);
+    assert(od_config_name(name, 0) == 10 && !strcmp(name, "OD2402859c"));
+    assert(od_config_security() && od_config_security()[0] == 1);
+    /* Maximum serial is stored whole but advertising fits legacy scan response. */
+    memset(serial, 'x', 31); serial[31] = 0;
+    config_crc(replacement, len);
+    assert(!od_config_start(len) && !od_config_append(replacement, len));
+    assert(od_config_name(name, 0) == 29 && strlen(name) == 29);
+    /* Do not cut a three-byte UTF-8 code point after the 26-byte prefix. */
+    memset(serial, 'a', 26); memcpy(serial + 26, "\xe4\xb8\xad", 4);
+    config_crc(replacement, len);
+    assert(!od_config_start(len) && !od_config_append(replacement, len));
+    assert(od_config_name(name, 0) == 28 && strlen(name) == 28);
+    memset(serial, 0, 32); config_crc(replacement, len);
+    assert(!od_config_start(len) && !od_config_append(replacement, len));
+    assert(od_config_name(name, 1) == 8 && !strcmp(name, "OD000001"));
+    assert(!od_config_clear()); od_config_init(&fake_flash);
+    assert(od_config_name(name, 0xa56935b2) == 8 && !strcmp(name, "OD6935B2"));
+    puts("Serial naming passed: TLV ordering, persistence, empty/clear fallback and UTF-8 bounds");
 }
