@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 static unsigned pins[32], resets, bits, byte, selections;
 static bool input_connected, stuck;
@@ -86,6 +87,17 @@ int main(void)
         assert(!wire[count - 2].data && wire[count - 2].value == 7);
         assert(wire[count - 1].data && wire[count - 1].value == 0xa5);
     }
+    check_idle();
+    /* panel_ic=19 has no upstream fast LUT either. Pin down that mode 1
+     * currently executes exactly the full-refresh SPI sequence, not a new LUT. */
+    count = 0;
+    assert(!epd_begin() && !epd_write(pixels, sizeof(pixels)) && !epd_finish(0));
+    unsigned full_count = count;
+    unsigned char full_wire[sizeof(wire)];
+    memcpy(full_wire, wire, count * sizeof(wire[0]));
+    count = 0;
+    assert(!epd_begin() && !epd_write(pixels, sizeof(pixels)) && !epd_finish(1));
+    assert(count == full_count && !memcmp(full_wire, wire, count * sizeof(wire[0])));
     check_idle();
     /* Non-square T5 region: verify vendor settings and both inverted planes. */
     count = 0;
