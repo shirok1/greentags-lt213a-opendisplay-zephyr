@@ -96,9 +96,13 @@ to monochrome. Scan for at least eight seconds when using slow advertising.
 To identify a tag by its printed serial, save it in OpenDisplay's existing configuration:
 
 ```sh
+uv run --locked python scripts/set_serial.py              # scan status, select a number, enter serial
+uv run --locked python scripts/set_serial.py scan --unset # list unset and unreadable tags, no writes
 uv run --locked python scripts/set_serial.py 'DEVICE_ADDRESS' 2402859c
 ```
 
+Scanning reads each discovered tag's configuration and shows its serial, status, RSSI and
+address. Unreadable tags are marked unknown, never mistaken for unset serials.
 The script backs up the current configuration, changes only `serial_number`, and reconnects
 to verify the result. The firmware advertises `OD2402859c`; use `--clear` to restore the
 chip-derived name. See [serial naming, length limits and authenticated devices](docs/ble-name.md).

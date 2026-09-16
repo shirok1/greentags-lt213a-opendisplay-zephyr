@@ -5,10 +5,20 @@
 固件优先使用 OpenDisplay `DataExtended`（TLV `0x2C`）的 `serial_number`：非空时名称为 `OD` + 序列号，保留大小写；没有此包或序列号为空时，沿用下面的芯片 ID 规则。GAP Device Name 与扫描响应中的 Complete Local Name 一致。配置提交后立即更新名称，断开再扫描即可看到，无需重启；清空序列号或恢复默认配置后回退芯片 ID。
 
 ```sh
-uv run --locked python scripts/upload.py scan
+# 一体入口：扫描、查看设置情况、按编号录入、重新扫描
+uv run --locked python scripts/set_serial.py
+# 只查看本轮收到广播的设备及真实 serial 设置情况
+uv run --locked python scripts/set_serial.py scan
+# 隐藏已设置的设备，保留未设置及无法确定状态的设备
+uv run --locked python scripts/set_serial.py scan --unset
+# 也可直接用已知地址录入或清空
 uv run --locked python scripts/set_serial.py DEVICE_ADDRESS 2402859c
 uv run --locked python scripts/set_serial.py DEVICE_ADDRESS --clear
 ```
+
+扫描列表显示编号、已设置/未设置/未知、serial_number、RSSI、名称及地址。没有收到广播名称时，操作系统提供的旧名称会标注“缓存名”。脚本先扫描广播，再按信号强度从高到低逐台连接读取配置；不会仅凭`ODxxxxxx`名称猜测是否设置过，也不会将超时或需要密钥的设备当作未设置。没有广播名称但带OpenDisplay厂商数据/服务UUID的设备也会列入；同名设备按地址分别保留。状态未知时显示原因，交互菜单不会直接对其写入。
+
+默认扫描12秒、每台读取最多20秒，可通过`--seconds 20 --timeout 30`调整。列表是本轮扫描快照；未收到广播的设备无法列出。不带参数进入交互模式，输入列表编号和新serial即可录入，`r`重新扫描、`q`退出，无需复制地址、拆电池或重启。录入后自动刷新列表；纯`scan`只读取，不修改配置。`--unset`也可用于交互模式。
 
 脚本先读取当前配置，仅修改 `data_extended.serial_number`；缺少 DataExtended 时创建该包，其余字段保留。写入前自动保存原配置到 `build/serial-backups/`，也可用 `--backup PATH` 指定一个尚不存在的文件；文件权限为0600，不覆盖已有备份。写入后重新连接并比对完整配置，验证其他字段没有改变。脚本调用官方SDK处理TLV、CRC、分包和认证；已启用认证的设备可传 `--key-file PATH`，文件必须是原始16字节密钥。
 
@@ -25,6 +35,8 @@ uv run --locked python scripts/set_serial.py DEVICE_ADDRESS --clear
 主机回归验证DataExtended位于SecurityConfig之后时的查找、名称为空的回退、恢复默认、31字节长串与UTF-8截断、保留其他配置/密钥、备份权限与拒绝覆盖、回读失败上报。完整测试通过，构建为120900 B Flash / 16376 B RAM（较上一轮PIPE修复增加232 B Flash、16 B RAM，预留栈/缓冲外剩8 B）。当前测试结果不构成最坏栈空间证明。
 
 本轮备份和日志位于`build/serial-number/`：`before-flash.bin`、`original-config.bin`、`set.log`、`hardware.log`、`tests.log`、`build.log`、`flash.log`。`scripts/set_serial.py`同样可以用于后续录入其他板子，传入对应的扫描地址即可。
+
+扫描/交互入口追加验证：`tests/test_serial.py`覆盖同名不同地址、无名称广播、未设置与读取超时/需密钥的区别、扫描无配置写入，以及`--unset`过滤后菜单编号仍准确对应设备。真实只读扫描第一轮发现2台，`OD84F6BD`配置确认为未设置，另1台读取超时标为未知；后一次扫描未收到OD广播，输出0台，没有复用上一轮列表或假装设备仍在线。记录位于`build/serial-scan/`。本轮没有修改任何实机serial或固件。
 
 ## 芯片 ID 回退规则与官方依据
 
