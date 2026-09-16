@@ -189,7 +189,13 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
         bool complete = p->active && p->pipe == (cmd == 0x82) &&
             (((size == 1 || size == 5) && payload[0] <= (p->partial ? 2 : 1)) || (!size && p->partial && p->pipe)) &&
             !stream(p, io, NULL, 0, true) && p->received == p->expected && (!p->compressed || p->zdone);
-        if (!complete) { od_abort(p, io); return reply(io, cmd, false); }
+        if (!complete) {
+            /* Active PIPE END always flushes its receive position, including
+             * short raw streams and truncated zlib, before the END result. */
+            int err = cmd == 0x82 && p->active && p->pipe ? sack(p, io, 0) : 0;
+            od_abort(p, io);
+            return err ? err : reply(io, cmd, false);
+        }
         return finish_transfer(p, io, cmd, size ? payload[0] : 2,
                                size == 5 ? be(payload + 1, 4) : p->new_etag);
     }
@@ -241,7 +247,9 @@ int od_handle(struct od_protocol *p, const struct od_io *io,
         return io->send(io->ctx, r, sizeof(r));
     }
     case 0x81: {
-        if (p->pipe_failed) { return 0; }
+        /* Retries can arrive after raw auto-END or after a fatal NACK. Do not
+         * invent a new error or abort an unrelated direct-write transaction. */
+        if (!p->active || !p->pipe || p->pipe_failed) { return 0; }
         int error = 4;
         if (p->active && p->pipe && size >= 2 && len <= p->pipe_frame) {
             uint8_t behind = p->next_seq - payload[0];

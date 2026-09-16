@@ -127,6 +127,12 @@ static void pipe_tests(void)
         pos += take; count++;
     }
     assert(count > 256);
+    /* A late retry after auto-END is harmless, even after the 8-bit wrap. */
+    uint8_t late_data[] = {0, 0x81, (uint8_t)(count - 1), 0xff};
+    int auto_finishes = finishes;
+    responses = 0;
+    assert(!od_handle(&p, &io, late_data, sizeof(late_data)));
+    assert(!responses && finishes == auto_finishes && !p.active);
     uint8_t end[] = {0, 1, 2, 3, 4}, packet[] = {0, 0x82, 0, 1, 2, 3, 4};
     int finished = finishes;
     responses = 0; assert(!od_handle(&p, &io, packet, sizeof(packet)));
@@ -150,7 +156,9 @@ static void pipe_tests(void)
     assert(!od_handle(&p, &io, ignored, sizeof(ignored)) && !responses);
     command(0x80, start, sizeof(start), true);
     packet[2] = 0; responses = 0; assert(!od_handle(&p, &io, packet, 3));
-    assert(response[0][0] == 255 && response[0][1] == 0x82);
+    assert(responses == 2 && response[0][0] == 0 && response[0][1] == 0x81);
+    assert(response[0][2] == 255 && response[0][3] == 0);
+    assert(response[1][0] == 255 && response[1][1] == 0x82);
 
     /* Exercise compression inside PIPE, including SACK before END ACK. */
     uint8_t zipped[4096], raw[2757];
@@ -176,6 +184,24 @@ static void pipe_tests(void)
     responses = 0; assert(!od_handle(&p, &io, packet, 2));
     assert(responses == 3 && response[1][0] == 0 && response[2][1] == 0x73);
     assert(!memcmp(panel, pixels, 64));
+
+    /* Stray PIPE DATA must not cancel an unrelated direct-write session. */
+    command(0x70, NULL, 0, true);
+    int prior_aborts = aborts;
+    responses = 0;
+    assert(!od_handle(&p, &io, late_data, sizeof(late_data)));
+    assert(!responses && p.active && !p.pipe && aborts == prior_aborts);
+    od_abort(&p, &io);
+
+    /* Truncated compressed END still flushes the SACK before its NACK. */
+    start[1] = 1;
+    command(0x80, start, sizeof(start), true);
+    uint8_t truncated[] = {0, 0x18, 0x95};
+    command(0x81, truncated, sizeof(truncated), true);
+    responses = 0;
+    assert(!od_handle(&p, &io, packet, 3));
+    assert(responses == 2 && response[0][1] == 0x81 && response[0][2] == 0);
+    assert(response[1][0] == 255 && response[1][1] == 0x82 && !p.active);
 }
 
 int main(void)
