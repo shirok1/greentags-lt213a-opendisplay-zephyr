@@ -1,5 +1,6 @@
 board:
   name: lt213a
+  full_name: Greentags LT213A
   vendor: greentags
   socs:
     - name: nrf51822

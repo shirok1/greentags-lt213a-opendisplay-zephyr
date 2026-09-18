@@ -22,7 +22,13 @@ uv run --locked python scripts/build.py --setup
 uv run --locked python scripts/test.py
 ```
 
-Python 使用 3.11 或 3.12，由 uv 管理环境。`--setup` 把固定提交的 Zephyr、CMSIS、Nordic HAL 和 TinyCrypt 下载到 `.deps/`；后续构建省略该参数。更换工具链时用 `--pristine` 重建。
+Python 使用 3.12，由 uv 管理环境。`--setup` 将 Zephyr 正式 tag、该 tag 的 manifest 白名单中固定的 CMSIS 6 / Nordic HAL，以及单独固定的 TinyCrypt 下载到 `.deps/`；后续构建省略该参数。更换工具链或 Zephyr 版本时用 `--pristine` 重建。
+
+从 3.7.1 工作目录升级时，旧构建可能修改过 `.deps/zephyr/subsys/bluetooth/host/att.c`。
+先用 `git -C .deps/zephyr diff -- subsys/bluetooth/host/att.c` 核对；若只有旧构建生成的 ATT 日志补丁，
+用 `git -C .deps/zephyr restore -- subsys/bluetooth/host/att.c` 移除后再执行 `--setup --pristine`。
+有自行修改的依赖代码时先保存，避免丢失。4.4.2 无需这个补丁。
+
 
 构建入口会应用项目的 Zephyr 补丁并检查 ELF 内存边界。产物位于 `build/zephyr/`：烧录使用 `zephyr.hex`，调试与测量保留匹配的 `zephyr.elf`、`zephyr.map` 和 `zephyr.bin`。以本次构建报告判断空间是否足够。
 

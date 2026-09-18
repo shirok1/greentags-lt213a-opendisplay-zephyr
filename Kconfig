@@ -9,3 +9,15 @@ config LT213A_EPD_DEEP_SLEEP
       never sends deep sleep before successful power-off.
 
 source "Kconfig.zephyr"
+
+config LT213A_BT_COMPACT_BUFFERS
+    bool "Compact buffers for the fixed LT213A Bluetooth profile"
+    default y
+    depends on BT_PERIPHERAL && BT_LL_SW_SPLIT
+    depends on !BT_CENTRAL && !BT_OBSERVER && !BT_EXT_ADV && !BT_ISO
+    depends on !BT_SMP && !BT_CLASSIC && !BT_L2CAP_DYNAMIC_CHANNEL
+    depends on !BT_HCI_RAW && !BT_HCI_VS && !BT_HCI_ACL_FLOW_CONTROL
+    help
+      Use the pinned Zephyr buffer patch: separate ACL and event RX pools,
+      size synchronous events for the enabled controller, and limit the
+      fallback signalling TX pool to 23 bytes. ATT retains its full MTU.

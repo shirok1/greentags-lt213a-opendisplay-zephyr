@@ -4,6 +4,10 @@
 
 本板使用 Zephyr 单连接 BLE peripheral，OpenDisplay 的发现依赖名称前缀、服务 UUID 和厂商数据。排查时应分别观察广播、连接、ATT MTU 和应用响应；某一层正常不代表下一层已经工作。
 
+Zephyr 4.4.2 使用 `BT_LE_ADV_OPT_CONN`，断开后由主循环重新启动快广播；连接引用尚未释放时沿用五秒重试。
+ACL 接收配置为 `BT_BUF_ACL_RX_COUNT_EXTRA=1`（总计两个缓冲），事件接收缓冲为三个，满足新版要求的数量大于 ACL TX 数量。
+紧凑缓冲补丁将 ACL 与短事件分池，并保留独立的 ATT MTU 247 TX 池，约束见[性能文档](performance.md)。这些路径尚需新版固件实机验证。
+
 ## 地址、名称与序列号
 
 BLE 地址标识连接对象，显示名称便于人识别，两者独立。固件在有效的 FICR 工厂静态地址存在时，于 `bt_enable()` 前调用 `bt_id_create()` 建立身份。这保留了关闭厂商 HCI 前的身份来源；改名称不会改地址。macOS 将地址映射为 peripheral UUID。
@@ -70,4 +74,4 @@ nRF51 的 Host 接收/GATT 回调可运行在系统工作队列，控制器还�
 
 在同一 BLE 身份下轮换 Zephyr/Mynewt 固件，曾出现 macOS 缓存旧 GATT 句柄导致订阅失败。跨固件对照应区分缓存问题与设备端属性权限；当时采用构建时测试身份完成对照，并未修改生产身份策略。
 
-底层依据为固定 Zephyr 的 [ATT 定义](https://github.com/zephyrproject-rtos/zephyr/blob/9f824289b28d7aea2eee74f62787c385a5005453/subsys/bluetooth/host/att_internal.h)、[连接与分片](https://github.com/zephyrproject-rtos/zephyr/blob/9f824289b28d7aea2eee74f62787c385a5005453/subsys/bluetooth/host/conn.c)。修改配置时应同时检查对应版本的实现与生成 `.config`。
+底层依据为固定 Zephyr 的 [ATT 定义](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/host/att_internal.h)、[连接与分片](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/host/conn.c)。修改配置时应同时检查对应版本的实现与生成 `.config`。

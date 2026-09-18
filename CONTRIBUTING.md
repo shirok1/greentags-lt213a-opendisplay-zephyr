@@ -17,7 +17,7 @@ The tests need a native C compiler with AddressSanitizer/UndefinedBehaviorSaniti
 They verify the protocol, fake-Flash transactions, independent crypto primitives, and
 panel GPIO command ordering. They do not establish radio, electrical, or timing correctness.
 
-When changing dependencies, update the fixed commits in `west.yml` or regenerate
+When changing dependencies, update the Zephyr release tag in `west.yml` (its imported manifest fixes HAL/CMSIS versions) or regenerate
 `uv.lock` with uv and include the lockfile change. Do not commit `.deps/`, `.venv/`,
 build outputs, personal keys, or device-specific configuration dumps.
 `src/config.inc` is intentionally committed; regenerate it with

@@ -35,8 +35,9 @@ uv run --locked python scripts/build.py --setup
 uv run --locked python scripts/test.py
 ```
 
-- 使用 `scripts/build.py` 作为构建入口：它配置工具链、应用 `scripts/patch_zephyr.py` 的
-  pinned Zephyr 补丁并自动检查 ELF 内存边界与复位向量。依赖修复应落在可复现的补丁脚本中。
+- 使用 `scripts/build.py` 作为构建入口：它配置工具链、应用 `scripts/patch_zephyr.py` 的固定版本
+  缓冲补丁并自动检查 ELF 内存边界与复位向量。
+  Zephyr 使用正式 tag，HAL/CMSIS 版本通过 manifest import 继承；仅额外依赖单独固定。
 - 固件变更执行构建和主机测试，报告本次 Flash/RAM 结果；更换工具链时加 `--pristine`。
   屏幕休眠或构建配置变更还需构建 `--no-epd-deep-sleep` 对照版本，CI 流程见
   [.github/workflows](.github/workflows)。两种构建共用 `build/`，后一次会覆盖前一次产物。

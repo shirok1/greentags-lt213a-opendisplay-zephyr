@@ -87,7 +87,7 @@ static int update_name(void)
 /* Shared Mynewt/Zephyr profile: fast 100–150 ms for 30 s, slow 1 s. */
 static int advertise(bool fast)
 {
-    return bt_le_adv_start(BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONNECTABLE,
+    return bt_le_adv_start(BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN,
                            fast ? 160 : 1600, fast ? 240 : 1600, NULL),
                            advertising, ARRAY_SIZE(advertising),
                            scan_response, ARRAY_SIZE(scan_response));
@@ -119,7 +119,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     atomic_clear(&link_up);
     atomic_inc(&generation);
     k_sem_give(&events);
-    /* Legacy connectable advertising automatically resumes in Zephyr. */
 }
 BT_CONN_CB_DEFINE(connection_callbacks) = {
     .connected = connected,
@@ -311,8 +310,8 @@ int main(void)
                 last_packet = now;
                 last_activity = now;
                 if (current != -1 && !atomic_get(&link_up)) {
-                    /* Stop Zephyr's automatically resumed legacy advertiser
-                     * and restart the fast window after every disconnect. */
+                    /* Restart the fast window after every disconnect.
+                     * If references still hold the connection, retry below. */
                     fast_advertising = true;
                     slow_adv_at = now + FAST_ADV_MS;
                     restart_advertising = true;

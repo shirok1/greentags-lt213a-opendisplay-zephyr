@@ -3,16 +3,13 @@ manifest:
   projects:
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
-      revision: 9f824289b28d7aea2eee74f62787c385a5005453
+      revision: v4.4.2
       west-commands: scripts/west-commands.yml
-    - name: cmsis
-      url: https://github.com/zephyrproject-rtos/cmsis
-      revision: 4b96cbb174678dcd3ca86e11e1f24bc5f8726da0
-      path: modules/hal/cmsis
-    - name: hal_nordic
-      url: https://github.com/zephyrproject-rtos/hal_nordic
-      revision: ab5cb2e2faeb1edfad7a25286dcb513929ae55da
-      path: modules/hal/nordic
+      import:
+        name-allowlist:
+          - cmsis_6
+          - hal_nordic
+    # Removed from Zephyr upstream; retained for OpenDisplay application crypto.
     - name: tinycrypt
       url: https://github.com/zephyrproject-rtos/tinycrypt
       revision: 1012a3ebee18c15ede5efc8332ee2fc37817670f

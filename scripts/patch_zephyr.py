@@ -1,20 +1,28 @@
-"""Apply the no-log ATT timeout fix to the pinned Zephyr dependency."""
+"""Apply (or remove before west update) the pinned LT213A buffer patch."""
 from pathlib import Path
+import argparse
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[1]
+PATCH = ROOT / "scripts/patches/zephyr-4.4.2-compact-buffers.patch"
 
 
-def patch(root):
-    path = root / "subsys/bluetooth/host/att.c"
-    source = path.read_text()
-    old = '\tbt_addr_le_to_str(bt_conn_get_dst(chan->att->conn), addr, sizeof(addr));\n\tLOG_ERR("ATT Timeout for device %s", addr);'
-    new = '#if defined(CONFIG_LOG)\n\tchar addr[BT_ADDR_LE_STR_LEN];\n\n' + old + '\n#endif'
-    declaration = '\tchar addr[BT_ADDR_LE_STR_LEN];\n\tstruct k_work_delayable *dwork'
-    if new in source:
+def patch(root, revert=False):
+    command = ["git", "-C", str(root), "apply"]
+    applied = subprocess.run(
+        [*command, "--reverse", "--check", str(PATCH)], capture_output=True,
+    ).returncode == 0
+    if revert:
+        if applied:
+            subprocess.run([*command, "--reverse", str(PATCH)], check=True)
         return
-    if source.count(old) != 1 or source.count(declaration) != 1:
-        raise RuntimeError("Unexpected Zephyr ATT source; review timeout logging patch")
-    source = source.replace(declaration, '\tstruct k_work_delayable *dwork')
-    path.write_text(source.replace(old, new))
+    if not applied:
+        subprocess.run([*command, "--check", str(PATCH)], check=True)
+        subprocess.run([*command, str(PATCH)], check=True)
 
 
 if __name__ == "__main__":
-    patch(Path(__file__).resolve().parents[1] / ".deps/zephyr")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--revert", action="store_true")
+    args = parser.parse_args()
+    patch(ROOT / ".deps/zephyr", args.revert)

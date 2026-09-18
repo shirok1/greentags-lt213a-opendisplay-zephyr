@@ -2,8 +2,9 @@
 
 OpenDisplay-compatible firmware for the **Greentags LT213A**, with an
 **nRF51822 QFAB (128 KiB Flash / 16 KiB RAM)** and a **GDEW0213T5 (104 × 212)** e-paper panel.
-It uses Zephyr 3.7.1's BLE host and software controller, without Nordic SoftDevice.
+It uses Zephyr 4.4.2's BLE host and software controller, without Nordic SoftDevice.
 This is an independent, experimental port, not an official OpenDisplay firmware release.
+The 4.4.2 port has build/host-test validation only; hardware results below predate this upgrade.
 
 [中文使用指南](docs/guide.zh-CN.md) · [Technical documentation / 技术文档](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
@@ -34,9 +35,9 @@ uv run --locked python scripts/build.py --setup
 uv run --locked python scripts/test.py
 ```
 
-Python 3.11/3.12 dependencies are managed by uv. `--setup` fetches the commits pinned in
+Python 3.12 dependencies are managed by uv. `--setup` fetches the revisions selected by
 [west.yml](west.yml) into `.deps/`; omit it for subsequent builds. Use `--pristine` after
-changing toolchains. The build entry point applies the pinned Zephyr patch and checks ELF
+changing toolchains or Zephyr versions. The build entry point applies the fixed-profile Bluetooth buffer patch and checks ELF
 Flash/RAM bounds and reset vectors. Outputs are in `build/zephyr/`.
 
 The application owns 126 KiB Flash; the last two 1 KiB pages hold configuration transaction
