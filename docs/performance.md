@@ -25,14 +25,17 @@ uv run --locked west build -d build -t dashboard
 
 动态堆为零。静态 RAM 之外的余量不等于主线程可用栈；反过来，主线程还有未使用前缀，也不能拿来新增全局缓冲。
 
-2026-09-18 的 TinyCrypt 基线 Zephyr `v4.4.2` 构建（Arm GNU GCC 15.3.1 20260627、全局 O2 + LTO）结果如下，尚无新版实机栈测量：
+2026-09-18 的无补丁 Zephyr `v4.4.2` 构建（Arm GNU GCC 15.3.1 20260627、
+全局 O2 + LTO、硬件 AES、主栈 1280 B）结果如下，尚无新版实机栈测量：
 
 | 屏幕模式 | Flash B | RAM B | 静态区外剩余 RAM B |
 | --- | ---: | ---: | ---: |
-| 默认 deep sleep | 110920 | 16172 | 212 |
-| power-off 对照 | 110872 | 16172 | 212 |
+| 默认 deep sleep | 109524 | 16360 | 24 |
+| power-off 对照 | 109484 | 16360 | 24 |
 
-该工具链的 ELF `rodata` 节带有 WRITE 标志，但物理地址位于 Flash；Zephyr 4.4.2 原生 `ram_report` 按节标志分类，将其 5,692 B 误计入 RAM，显示 21,864 B。报告和 dashboard 适合查符号，容量判断使用链接器及 `check_memory.py` 的实际加载地址；LTO 也会使部分符号失去源文件归属。
+该工具链的 ELF `rodata` 节带有 WRITE 标志，但物理地址位于 Flash；原生 `ram_report`
+会误计入 RAM。报告和 dashboard 适合查符号，容量判断使用链接器及 `check_memory.py`
+的实际加载地址；LTO 也会使部分符号失去源文件归属。
 
 2026-09-16 的帧数配置构建报告为 121,036 B Flash / 16,376 B RAM，预留区外剩 8 B；这是历史样本，不是其他工具链或后续代码的保证。每次以当前构建输出为准。
 
@@ -58,33 +61,49 @@ uv run --locked west build -d build -t dashboard
 - 去掉厂商 HCI 后，应用在 `bt_enable()` 前从 FICR 建立固定 BLE 身份，否则可能每次启动换地址。
 - Zephyr 4.4.2 已将 ATT 地址格式化放进日志宏，无日志构建无需旧的 ATT 补丁，仍保留超时断开。
 
-依赖版本通过 `west.yml` 的 Zephyr tag 和导入的 manifest 固定。直接改 `.deps/` 不构成可复现交付。没有用关闭认证、削减数据池或降低协议校验来获得链接空间。
+依赖版本通过 `west.yml` 的 Zephyr tag 和导入的 manifest 固定。直接改 `.deps/` 不构成可复现交付。保留认证、MTU 247 与协议校验；原生池数量和栈预算的调整见下文。
 
 O3 曾超资源，Oz 在当时工具链与 Os 产物相同；这些都是候选实验结果，不能泛化为所有编译器的规律。更换优化等级应同时检查实际编译命令、ELF、栈及代表性负载。
 
-## Zephyr 4.4 的配置与缓冲适配
+## 无补丁的内存预算
 
-先检查原生配置：额外蓝牙线程、扫描、扩展广播、ISO、动态堆、线程统计均未启用。
-`prj.conf` 关闭未使用的动态连接回调注册与 GAP 服务调试校验，并使用 32 位相对超时；应用使用有界相对等待，`k_uptime_get()` 仍返回 64 位运行时间。这使 RAM 超限从 1,088 B 降至 948 B，尚不足以链接。
+Zephyr 依赖使用未修改的正式 tag，不再维护或自动应用 Bluetooth 缓冲池补丁。
+在 `dbb00ad` 的 TinyCrypt 基线上，仅取消补丁会超出 RAM 948 B。
+以下组合保留 MTU 247、认证、流式 zlib 和应用单命令队列，使原生缓冲实现可链接：
 
-[紧凑缓冲补丁](../scripts/patches/zephyr-4.4.2-compact-buffers.patch) 再回收 1,160 B，由 `LT213A_BT_COMPACT_BUFFERS` 控制：
+- AES 使用控制器的 `bt_encrypt_be()`，CMAC/CCM 保持主机可测；认证 CMAC 分支已知
+  调用帧从 1288 B 降到 916 B，主栈预算从 1600 B 调至 1280 B，回收 320 B。
+- 解压 literal/length 符号表从 16 bit 改为 9 bit，小字母表改为 8 bit。512 B 滑动窗口
+  和符号范围保留，inflater 状态从 1516 B 降至 1232 B，计入链接对齐后回收 288 B RAM。
+- ACL TX 从 2 调为 1，Event RX 从 3 调为 2，回收 364 B。事件数量仍大于 ACL TX。
+  ACL RX extra=1、ATT TX=1、L2CAP TX=2 以及分片池保持原值。
 
-- 将共享接收池拆成两个完整 ACL 缓冲和三个短 HCI 事件缓冲；每次释放仍通知驱动重试，独立同步事件池继续保留。
-- 同步事件按配置的 68 B 载荷分配；编译断言覆盖启用命令中最大的 Read Supported Commands 完成响应。
-- ATT 独立发送池保留 MTU 247；备用 L2CAP 发送池仅用于 LE 信令和 Pairing Failed，以 23 B 载荷分配，数量仍为两个。
+合计回收 972 B，使取消补丁后的 17332 B RAM 降至 16360 B。
+这不是保持全部队列预算的等价变换：发送并行度降低，池耗尽、吞吐、无线重传与重连须实测。
+916 B 也不是整个主线程的最大栈消耗；更深的通知链、协议回调、启动包装和异常现场仍需覆盖。
+1280 B 主栈通过构建和主机测试，尚无此版本的实机水位证据；旧的 1600 B 栈实测不能证明它安全。
+控制器 RX 栈保持新版默认 896 B，其他线程栈未缩小。
 
-Kconfig 限制该方案用于本板固定的 peripheral + 软件控制器组合：无 SMP、Classic、动态 L2CAP、扫描、扩展广播、ISO 或厂商 HCI。改变协议功能时必须重新审查池尺寸和调用者；它不是通用 Zephyr 内存补丁。没有缩小应用线程栈，控制器 RX 栈使用新版默认 896 B；旧版 768 B 栈实测不能证明新版余量。
+单独换硬件 AES、仍保留 1600 B 主栈时，Flash 从 110920 B 降至 109392 B，
+静态 RAM 不变。压紧表在同一硬件候选上增加 224 B Flash，以少量解码指令换 RAM。
+密码学实现与测量限制见[硬件 AES 与 RAM](crypto-memory-options.md)。
 
-`build.py` 自动应用补丁；`--setup` 在更新依赖前撤销已匹配补丁，更新后重新应用。重复应用不修改源码，不匹配时失败，避免静默套用到未知版本。该构建及主机测试不覆盖池耗尽、无线重传、断开重连和新版调度的实机行为。
+`BT_RECV_WORKQ_SYS` 已启用，不能再靠合并 host RX 线程省出另一份栈。
+实验中只打开 HCI ACL flow control 会增加接收/命令缓冲，超出量从 948 B 增为 1668 B，
+不能替代原补丁。降 MTU 虽可链接，但 SDK 的加密配置首包需要至少 MTU 236，因此未采用。
 
-## 硬件 AES 与应用栈
+旧检出中的 `.deps/zephyr` 可能还留有上一版补丁。切换到无补丁构建前，先检查
+`git -C .deps/zephyr diff`，确认只有已知补丁时可用历史版本撤销：
 
-TinyCrypt 已由控制器 `bt_encrypt_be()` 和应用固定参数 CMAC/CCM 模式层替代。
-2026-09-18，同工具链 O2 + LTO、1600 B 主栈、保留紧凑池补丁的对照构建中，
-Flash 从 110920 B 降至 109392 B，RAM 仍为 16172 B。
-认证 CMAC 分支的已知栈帧从 1288 B 降至 916 B；这不是整个主线程的最坏栈上界，
-通知、协议回调、启动包装及异常现场仍需覆盖。主机互通及模式边界测试通过，
-新硬件后端的无线行为和实机水位未验证。详见[实现与测量](crypto-memory-options.md)。
+```sh
+mkdir -p build
+git show dbb00ad:scripts/patches/zephyr-4.4.2-compact-buffers.patch > build/legacy-buffers.patch
+git -C .deps/zephyr apply --reverse "$PWD/build/legacy-buffers.patch"
+```
+
+全新依赖无需这一步；已经撤销时也不要重复运行。存在其他依赖修改时先分别处理，
+不要为构建直接丢弃本地修改。正式验证使用 `scripts/build.py --setup --pristine`、
+`scripts/test.py` 和 power-off 对照构建。随机 zlib 流测试覆盖分包边界和不同 Huffman 表。
 
 ## 把刷新时间拆开
 

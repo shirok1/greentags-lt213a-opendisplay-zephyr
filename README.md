@@ -37,11 +37,12 @@ uv run --locked python scripts/test.py
 
 Python 3.12 dependencies are managed by uv. `--setup` fetches the revisions selected by
 [west.yml](west.yml) into `.deps/`; omit it for subsequent builds. Use `--pristine` after
-changing toolchains or Zephyr versions. The build entry point applies the fixed-profile Bluetooth buffer patch and checks ELF
+changing toolchains or Zephyr versions. The build entry point uses unmodified upstream Zephyr and checks ELF
 Flash/RAM bounds and reset vectors. Outputs are in `build/zephyr/`.
 
 The application owns 126 KiB Flash; the last two 1 KiB pages hold configuration transaction
-slots. RAM is tightly constrained, with no dynamic heap or full-frame MCU buffer. Use the
+slots. RAM is tightly constrained, with no dynamic heap or full-frame MCU buffer. Hardware AES and packed Huffman tables
+allow MTU 247 with smaller stack/buffer budgets; those budgets still need hardware validation. Use the
 current build report for memory usage; static RAM headroom is distinct from stack headroom.
 The default is global O2 + LTO and panel deep sleep; `--no-epd-deep-sleep` builds a power-off
 comparison variant into the same output directory. See [performance and memory](docs/performance.md).

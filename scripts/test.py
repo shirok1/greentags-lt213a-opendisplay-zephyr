@@ -50,6 +50,7 @@ subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-We
                 "tests/test_storage.c", "-o", "build/test-storage"], check=True)
 subprocess.run(["build/test-storage"], check=True)
 subprocess.run([sys.executable, "tests/test_security.py"], check=True)
+subprocess.run([sys.executable, "tests/test_zlib.py"], check=True)
 subprocess.run([sys.executable, "scripts/test_epd.py"], check=True)
 subprocess.run([sys.executable, "scripts/test_telemetry.py"], check=True)
 subprocess.run([sys.executable, "tests/test_upload.py"], check=True)

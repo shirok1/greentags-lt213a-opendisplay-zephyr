@@ -6,7 +6,8 @@ Third-party files retain the license terms and notices supplied with those files
 - [OpenDisplay/Firmware](https://github.com/OpenDisplay/Firmware/tree/7c9413edd9f7fa16e714f6ebc00b76efd3bad4eb), commit 7c9413edd9f7fa16e714f6ebc00b76efd3bad4eb:
   protocol/configuration reference and third_party/uzlib streaming decompressor.
   The decompressor was adapted to a small streaming sink; Huffman code lengths
-  are packed into nibbles to reduce SRAM. Preserve the source copyright notices
+  are packed into nibbles, literal/length symbols into nine bits, and smaller
+  symbol alphabets into bytes to reduce SRAM. Preserve the source copyright notices
   and [third_party/uzlib/LICENSE](third_party/uzlib/LICENSE). The source is derived
   from `lib/uzlib/src/` in that upstream revision. The adapted OpenDisplay stream
   file is covered by the upstream project license; underlying uzlib files retain

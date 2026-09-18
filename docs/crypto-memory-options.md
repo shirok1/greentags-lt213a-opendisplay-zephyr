@@ -40,6 +40,11 @@ tiny-AES-c 的 AES-128 ECB context 同样保留 176 B 展开轮密钥，因此�
 缩栈后端。依据：[TinyCrypt headers](https://github.com/zephyrproject-rtos/tinycrypt/tree/1012a3ebee18c15ede5efc8332ee2fc37817670f/lib/include/tinycrypt)、
 [tiny-AES-c context](https://github.com/kokke/tiny-AES-c/blob/master/aes.h)。
 
+当前默认已采用未修改 Zephyr、压紧 Huffman 表、1280 B 主栈和 ACL TX 1 / Event RX 2：
+deep sleep 为 109524 B Flash / 16360 B RAM，power-off 为 109484 B Flash / 16360 B RAM。
+MTU 247 保留；与上表相同，工具链为 GCC 15.3.1、O2 + LTO。
+这是构建和主机测试证据，新的栈/缓冲预算仍需实机验证；详见[内存预算](performance.md)。
+
 ## 栈测量的含义
 
 原型使用 `-fstack-usage` 的 LTO 最终报告和反汇编核对同一认证分支：

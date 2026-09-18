@@ -1,6 +1,7 @@
 /*
  * OpenDisplay streaming zlib inflater, based on uzlib/tinf.
- * LT213A modification: pack Huffman code lengths into four-bit entries.
+ * LT213A modifications: four-bit code lengths, nine-bit literal/length symbols,
+ * and eight-bit distance/code-length symbols.
  */
 
 #include <string.h>
@@ -19,17 +20,17 @@
 
 typedef struct {
     unsigned short table[16];
-    unsigned short trans[288];
+    uint8_t trans[324]; /* 288 low bytes + 36 high-bit bytes */
 } TINF_LITERAL_TREE;
 
 typedef struct {
     unsigned short table[16];
-    unsigned short trans[32];
+    uint8_t trans[32];
 } TINF_DISTANCE_TREE;
 
 typedef struct {
     unsigned short table[16];
-    unsigned short trans[19];
+    uint8_t trans[19];
 } TINF_CODELEN_TREE;
 
 static const unsigned char length_bits[30] = {
@@ -186,7 +187,22 @@ static void set_length(unsigned i, unsigned value) {
     s.lengths[i / 2] = (s.lengths[i / 2] & ~(15u << shift)) | (value << shift);
 }
 
-static bool build_tree(unsigned short *table, unsigned short *trans, unsigned int trans_size, unsigned base, unsigned int num) {
+/* count is the symbol capacity, not the packed array byte size. Only the
+ * 288-entry literal/length alphabet needs a ninth bit; smaller trees use bytes.
+ * Store high bits separately to avoid unaligned accesses and cross-byte reads.
+ */
+static void trans_set(uint8_t *trans, unsigned count, unsigned index, unsigned value) {
+    trans[index] = (uint8_t)value;
+    if (count > 256) {
+        unsigned shift = index & 7;
+        trans[count + index / 8] = (uint8_t)((trans[count + index / 8] & ~(1u << shift)) | (((value >> 8) & 1u) << shift));
+    }
+}
+static unsigned trans_get(const uint8_t *trans, unsigned count, unsigned index) {
+    return trans[index] | (count > 256 ? ((trans[count + index / 8] >> (index & 7)) & 1u) << 8 : 0);
+}
+
+static bool build_tree(unsigned short *table, uint8_t *trans, unsigned int trans_size, unsigned base, unsigned int num) {
     unsigned short offs[16];
     unsigned int i, sum;
 
@@ -210,7 +226,7 @@ static bool build_tree(unsigned short *table, unsigned short *trans, unsigned in
     }
 
     for (i = 0; i < num; ++i) {
-        if (get_length(base + i)) trans[offs[get_length(base + i)]++] = i;
+        if (get_length(base + i)) trans_set(trans, trans_size, offs[get_length(base + i)]++, i);
     }
     return true;
 }
@@ -223,10 +239,10 @@ static void build_fixed_trees(void) {
     s.ltree.table[7] = 24;
     s.ltree.table[8] = 152;
     s.ltree.table[9] = 112;
-    for (i = 0; i < 24; ++i) s.ltree.trans[i] = 256 + i;
-    for (i = 0; i < 144; ++i) s.ltree.trans[24 + i] = i;
-    for (i = 0; i < 8; ++i) s.ltree.trans[24 + 144 + i] = 280 + i;
-    for (i = 0; i < 112; ++i) s.ltree.trans[24 + 144 + 8 + i] = 144 + i;
+    for (i = 0; i < 24; ++i) trans_set(s.ltree.trans, 288, i, 256 + i);
+    for (i = 0; i < 144; ++i) trans_set(s.ltree.trans, 288, 24 + i, i);
+    for (i = 0; i < 8; ++i) trans_set(s.ltree.trans, 288, 24 + 144 + i, 280 + i);
+    for (i = 0; i < 112; ++i) trans_set(s.ltree.trans, 288, 24 + 144 + 8 + i, 144 + i);
 
     s.tree.dtree.table[5] = 32;
     for (i = 0; i < 32; ++i) s.tree.dtree.trans[i] = i;
@@ -279,7 +295,7 @@ static int read_bits(unsigned int num, unsigned int base, unsigned int *value) {
     return 1;
 }
 
-static int decode_symbol(const unsigned short *table, const unsigned short *trans, unsigned int trans_size, int *symbol) {
+static int decode_symbol(const unsigned short *table, const uint8_t *trans, unsigned int trans_size, int *symbol) {
     if (!s.sym_active) {
         s.sym_active = true;
         s.sym_sum = 0;
@@ -307,7 +323,7 @@ static int decode_symbol(const unsigned short *table, const unsigned short *tran
         set_error("invalid huffman symbol");
         return -1;
     }
-    *symbol = trans[s.sym_sum];
+    *symbol = (int)trans_get(trans, trans_size, s.sym_sum);
     s.sym_active = false;
     return 1;
 }
@@ -434,7 +450,7 @@ static int process_dynamic_trees(void) {
                 set_error("dynamic tree missing end-of-block");
                 return -1;
             }
-            if (!build_tree(s.ltree.table, s.ltree.trans, TINF_ARRAY_SIZE(s.ltree.trans), 0, s.hlit)) return -1;
+            if (!build_tree(s.ltree.table, s.ltree.trans, 288, 0, s.hlit)) return -1;
             if (!build_tree(s.tree.dtree.table, s.tree.dtree.trans, TINF_ARRAY_SIZE(s.tree.dtree.trans), s.hlit, s.hdist)) return -1;
             s.dynamic_stage = DYN_HLIT;
             reset_code_readers();
@@ -482,7 +498,7 @@ static int process_block_data(uint8_t *output, size_t capacity, size_t *produced
         if (*produced >= capacity) return 2;
         switch (s.block_stage) {
         case BLK_SYMBOL: {
-            int rc = decode_symbol(s.ltree.table, s.ltree.trans, TINF_ARRAY_SIZE(s.ltree.trans), &sym);
+            int rc = decode_symbol(s.ltree.table, s.ltree.trans, 288, &sym);
             if (rc <= 0) return rc;
             if (sym < 256) {
                 if (!put_output_byte((uint8_t)sym, output, capacity, produced)) return s.stage == ST_ERROR ? -1 : 2;

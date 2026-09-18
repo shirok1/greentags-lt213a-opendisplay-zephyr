@@ -5,8 +5,8 @@
 本板使用 Zephyr 单连接 BLE peripheral，OpenDisplay 的发现依赖名称前缀、服务 UUID 和厂商数据。排查时应分别观察广播、连接、ATT MTU 和应用响应；某一层正常不代表下一层已经工作。
 
 Zephyr 4.4.2 使用 `BT_LE_ADV_OPT_CONN`，断开后由主循环重新启动快广播；连接引用尚未释放时沿用五秒重试。
-ACL 接收配置为 `BT_BUF_ACL_RX_COUNT_EXTRA=1`（总计两个缓冲），事件接收缓冲为三个，满足新版要求的数量大于 ACL TX 数量。
-紧凑缓冲补丁将 ACL 与短事件分池，并保留独立的 ATT MTU 247 TX 池，约束见[性能文档](performance.md)。这些路径尚需新版固件实机验证。
+ACL 接收配置为 `BT_BUF_ACL_RX_COUNT_EXTRA=1`（两个 ACL 槽），与两个事件槽使用原生共享接收池。事件数量大于 ACL TX 数量。
+使用上游原生缓冲实现，ACL TX 数量为 1、Event RX 为 2，保留 MTU 247 和两个 L2CAP TX 缓冲；不再修改 Zephyr。约束见[性能文档](performance.md)。池耗尽、无线重传与重连尚需新版固件实机验证。
 
 ## 地址、名称与序列号
 

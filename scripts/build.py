@@ -30,14 +30,11 @@ def main():
         if not (DEPS / ".west").exists():
             run("west", "init", "-l", str(manifest), cwd=DEPS)
         run("west", "config", "manifest.path", "manifest", cwd=DEPS)
-        if (DEPS / "zephyr/.git").exists():
-            run(sys.executable, str(ROOT / "scripts/patch_zephyr.py"), "--revert")
         run("west", "update", "--narrow", cwd=DEPS)
     if not all((DEPS / path).is_dir() for path in (
         "zephyr", "modules/hal/nordic/nrfx", "modules/hal/cmsis_6",
     )):
         parser.error("Run with --setup first")
-    run(sys.executable, str(ROOT / "scripts/patch_zephyr.py"))
     env = os.environ.copy()
     env["ZEPHYR_BASE"] = str(DEPS / "zephyr")
     if "ZEPHYR_TOOLCHAIN_VARIANT" not in env:
