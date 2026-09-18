@@ -1,8 +1,6 @@
 #include "security.h"
 #include "config_store.h"
-#include <tinycrypt/aes.h>
-#include <tinycrypt/cmac_mode.h>
-#include <tinycrypt/ccm_mode.h>
+#include "crypto.h"
 #include <string.h>
 #include <errno.h>
 
@@ -16,10 +14,7 @@ static void put64(uint8_t *p, uint64_t v)
 { for (int i = 7; i >= 0; i--) { p[i] = v; v >>= 8; } }
 static bool cmac(const uint8_t *key, const uint8_t *input, size_t len, uint8_t *output)
 {
-    struct tc_aes_key_sched_struct aes;
-    struct tc_cmac_struct state;
-    bool ok = tc_cmac_setup(&state, key, &aes) && tc_cmac_update(&state, input, len) && tc_cmac_final(output, &state);
-    wipe(&aes, sizeof(aes)); wipe(&state, sizeof(state)); return ok;
+    return od_cmac(key, input, len, output);
 }
 
 void od_security_reset(struct od_security *s)
@@ -71,8 +66,7 @@ int od_security_auth(struct od_security *s, const uint8_t *p, size_t len,
     input[56] = 0; input[57] = 0x80;
     if (!cmac(config + 1, input, 58, proof)) { od_security_reset(s); return 3; }
     memset(input, 0, 8); input[7] = 1; memcpy(input + 8, proof, 8);
-    struct tc_aes_key_sched_struct aes;
-    tc_aes128_set_encrypt_key(&aes, config + 1); tc_aes_encrypt(s->key, input, &aes); wipe(&aes, sizeof(aes));
+    if (od_aes_block(config + 1, input, s->key)) { od_security_reset(s); return 3; }
     memcpy(input, p, 16); memcpy(input + 16, s->challenge, 16);
     if (!cmac(s->key, input, 32, proof)) { od_security_reset(s); return 3; }
     memcpy(s->id, proof, 8);
@@ -93,10 +87,7 @@ int od_security_decrypt(struct od_security *s, uint8_t *frame, size_t len, uint3
     if (counter >> 63) { return -EACCES; }
     uint64_t behind = s->rx_counter - counter;
     if (s->rx_seen && counter <= s->rx_counter && (behind >= 32 || (s->replay & (1u << behind)))) { return -EALREADY; }
-    struct tc_aes_key_sched_struct aes; struct tc_ccm_mode_struct ccm;
-    tc_aes128_set_encrypt_key(&aes, s->key); tc_ccm_config(&ccm, &aes, frame + 5, 13, 12);
-    bool ok = tc_ccm_decryption_verification(frame + 18, len - 18, frame, 2, frame + 18, len - 18, &ccm);
-    wipe(&aes, sizeof(aes));
+    bool ok = od_ccm(s->key, frame + 5, frame, frame + 18, len - 30, true);
     if (!ok || frame[18] != len - 31) { return -EBADMSG; }
     if (!s->rx_seen || counter > s->rx_counter) {
         uint64_t ahead = counter - s->rx_counter;
@@ -107,16 +98,13 @@ int od_security_decrypt(struct od_security *s, uint8_t *frame, size_t len, uint3
     size_t size = frame[18]; memmove(frame + 2, frame + 19, size); return size + 2;
 }
 
-/* Do not reserve AES/CCM state in send_response while an unencrypted BLE
- * notification is sent: that overflows the 1280-byte main stack with LTO. */
+/* Keep CCM scratch out of send_response while BLE notification code runs. */
 __attribute__((noinline))
 int od_security_encrypt(struct od_security *s, const uint8_t *plain, size_t len, uint8_t *out, size_t capacity)
 {
     if (!s->authenticated || len < 2 || len > 215 || capacity < len + 29 || s->tx_counter == UINT64_MAX) { return -EINVAL; }
     memcpy(out, plain, 2); memcpy(out + 2, s->id, 8); put64(out + 10, s->tx_counter++);
     out[18] = len - 2; memcpy(out + 19, plain + 2, len - 2);
-    struct tc_aes_key_sched_struct aes; struct tc_ccm_mode_struct ccm;
-    tc_aes128_set_encrypt_key(&aes, s->key); tc_ccm_config(&ccm, &aes, out + 5, 13, 12);
-    bool ok = tc_ccm_generation_encryption(out + 18, capacity - 18, out, 2, out + 18, len - 1, &ccm);
-    wipe(&aes, sizeof(aes)); return ok ? (int)len + 29 : -EIO;
+    bool ok = od_ccm(s->key, out + 5, out, out + 18, len - 1, false);
+    return ok ? (int)len + 29 : -EIO;
 }

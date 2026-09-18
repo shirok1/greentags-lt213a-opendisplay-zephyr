@@ -11,7 +11,7 @@ The 4.4.2 port has build/host-test validation only; hardware results below preda
 ## Capabilities and limits
 
 - Raw/zlib streaming, PIPE with a negotiated window of one, persistent configuration,
-  application-layer authentication and encryption, and temperature/internal-VDD telemetry.
+  application-layer authentication and encryption using controller-backed hardware AES, and temperature/internal-VDD telemetry.
 - Full-screen uploads and selected authenticated and partial-update paths have been tested
   on hardware with py-opendisplay 7.14.1. T5 partial updates can retain slight ghosting;
   full-screen fast mode uses the full-refresh waveform.

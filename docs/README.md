@@ -12,6 +12,7 @@
 | 理解全刷、局刷、残影与帧数 | [T5 屏幕驱动](display.md) |
 | 理解待机、遥测、看门狗与故障恢复 | [电源与稳定性](power.md) |
 | 分析速度、内存、编译优化与测量方法 | [性能与内存](performance.md) |
+| 评估 TinyCrypt 替代、硬件 AES 与栈收益 | [加密库与 RAM 预算](crypto-memory-options.md) |
 | 选择测试、判断哪些结论已有证据 | [验证指南与证据边界](validation.md) |
 
 第一次接触项目，依次读使用指南、架构，再选择一个主题。开发约定见 [CONTRIBUTING](../CONTRIBUTING.md)，agent 的工作入口见 [AGENTS](../AGENTS.md)。

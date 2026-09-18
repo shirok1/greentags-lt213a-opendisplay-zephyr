@@ -14,6 +14,18 @@ SecurityConfig 使用 TLV `0x27`。启用时必须提供非零 128 位密钥；�
 
 挑战单次使用，包括错误证明；30 秒后失效。认证请求按一分钟窗口限速，限速状态跨断连和重认证保留。开始新握手会中止未完成图像/配置事务，避免旧会话数据进入新会话。
 
+## 密码学实现边界
+
+固件通过 `src/crypto_zephyr.c` 调用控制器的公开 `bt_encrypt_be()`，复用 nRF51 ECB
+外设，不再编译 TinyCrypt。`src/crypto.c` 实现 AES-CMAC 和固定 OpenDisplay CCM 参数，
+主机用独立 AES-block 后端编译同一模式层，并与 OpenSSL CMAC/AESCCM 交叉验证。
+完整 tag 比较、失败载荷清理及重放窗口提交顺序保留；模式实现仅支持 13 B nonce、
+2 B AAD、12 B tag 和不超过 214 B 的加密正文，接口容量/重叠约束见 `src/crypto.h`。
+
+此后端替换尚无实机密码学和栈水位证据。Zephyr 的 ECB 局部参数副本未主动擦除，
+应用模式层的清理不覆盖已返回的驱动栈帧；不应宣称完整密钥擦除。
+内存和栈对照见[加密库与 RAM 预算](crypto-memory-options.md)。
+
 ## 帧格式与 MTU 预算
 
 加密 wire 保留两字节命令头，后接会话 ID、计数器、加密的长度与 payload，以及 12 B CCM tag。相对原始完整命令增加 29 B；CCM 使用派生出的 13 B nonce，命令头作为附加认证数据。
@@ -53,7 +65,7 @@ SecurityConfig 的非零超时表示从认证成功开始计算的**绝对期限
 
 ## 验证和维护重点
 
-运行 `uv run --locked python scripts/test.py` 会生成共享配置 fixture，再执行密码学测试。直接单跑 `tests/test_security.py` 需要这些 fixture 及 TinyCrypt 已就绪。
+运行 `uv run --locked python scripts/test.py` 会生成共享配置 fixture，再执行密码学测试。直接单跑 `tests/test_security.py` 需要这些 fixture；主机 AES 后端使用 uv 管理的 cryptography，无需下载 TinyCrypt。
 
 已有实机回归覆盖缺少/错误 key、坏 tag 后相同 nonce 合法包、重复 PIPE nonce、加密 raw/zlib 全刷和局刷、60 秒绝对期限、恢复无 key 配置。完整换 key、低 MTU peer、真实掉电仍不是这些结果覆盖的能力。
 

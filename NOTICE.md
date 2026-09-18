@@ -18,5 +18,5 @@ Third-party files retain the license terms and notices supplied with those files
   The original archive and example images are not redistributed.
 - GDEW0213T5 Arduino example (2019-10-16): full-refresh hardware initialization
   sequence reference. The original archive and example images are not redistributed.
-- Zephyr, CMSIS, Nordic HAL and TinyCrypt are fetched at revisions selected by [west.yml](west.yml) and its imported Zephyr manifest;
+- Zephyr, CMSIS and Nordic HAL are fetched at revisions selected by [west.yml](west.yml) and its imported Zephyr manifest;
   each dependency retains its own license and copyright notices.

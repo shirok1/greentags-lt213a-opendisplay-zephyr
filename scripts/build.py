@@ -35,7 +35,6 @@ def main():
         run("west", "update", "--narrow", cwd=DEPS)
     if not all((DEPS / path).is_dir() for path in (
         "zephyr", "modules/hal/nordic/nrfx", "modules/hal/cmsis_6",
-        "modules/crypto/tinycrypt/lib/source",
     )):
         parser.error("Run with --setup first")
     run(sys.executable, str(ROOT / "scripts/patch_zephyr.py"))

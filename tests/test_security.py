@@ -8,13 +8,27 @@ from cryptography.hazmat.primitives.cmac import CMAC
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 root = Path(__file__).resolve().parents[1]
-tiny = root / ".deps/modules/crypto/tinycrypt/lib"
 library = root / "build/test-security.so"
 subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
-    "-fsanitize=undefined", "-Isrc", f"-I{tiny / 'include'}", "src/security.c", "src/config_store.c",
-    "tests/security_bridge.c", *[str(tiny / f"source/{name}.c") for name in ("aes_encrypt", "cmac_mode", "ccm_mode", "utils")],
+    "-fsanitize=undefined", "-Isrc", "src/security.c", "src/config_store.c",
+    "tests/security_bridge.c", "src/crypto.c", "tests/crypto_bridge.c",
     "-o", str(library)], check=True, cwd=root)
 lib = ct.CDLL(str(library))
+# Exercise the same C modes as firmware, with independent AES block encryption.
+AES_BLOCK = ct.CFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_void_p, ct.c_void_p)
+@AES_BLOCK
+def aes_block(key, source, dest):
+    try:
+        encryptor = Cipher(algorithms.AES(ct.string_at(key, 16)), modes.ECB()).encryptor()
+        result = encryptor.update(ct.string_at(source, 16)) + encryptor.finalize()
+        ct.memmove(dest, result, 16)
+        return 0
+    except Exception:
+        return -1
+lib.set_aes_block.argtypes = [AES_BLOCK]
+lib.set_aes_block(aes_block)
+lib.fail_aes_after.argtypes = [ct.c_int]
+
 lib.setup.argtypes = [ct.c_void_p, ct.c_size_t]
 lib.auth.argtypes = [ct.c_void_p, ct.c_size_t, ct.c_uint32, ct.c_void_p]
 lib.decrypt.argtypes = [ct.c_void_p, ct.c_size_t, ct.c_uint32]
@@ -68,6 +82,11 @@ assert decrypt(packet(3))[0] < 0
 changed = bytearray(packet(101)); changed[1] ^= 1
 assert decrypt(bytes(changed))[0] < 0
 assert decrypt(packet(101, bytes(range(200))))[0] == 202
+lib.fail_aes_after(0)
+assert decrypt(packet(102))[0] < 0
+lib.fail_aes_after(-1)
+assert decrypt(packet(102))[0] == 7  # AES failure did not advance replay state
+assert decrypt(packet(103, bytes(range(213))))[0] == 215
 
 out = ct.create_string_buffer(244)
 plain = b"\0\x71"
@@ -78,7 +97,7 @@ assert int.from_bytes(wire[10:18], "big") == 1 << 63
 assert AESCCM(session, tag_length=12).decrypt(wire[5:18], wire[18:], wire[:2]) == b"\0"
 # Valid traffic immediately before expiry must not renew the session.
 assert lib.expire(60999) == 0
-assert decrypt(packet(102), now=60999)[0] == 7
+assert decrypt(packet(104), now=60999)[0] == 7
 assert lib.expire(61000) == 1 and not lib.authenticated()
 assert decrypt(packet(102))[0] < 0
 
@@ -99,3 +118,46 @@ assert auth(b"\0", 300000)[2] == 0
 for n in range(246):
     assert decrypt(bytes(n))[0] < 0
 print("Crypto interoperability passed: CMAC KDF, mutual proofs, CCM, tamper/replay rejection, expiry and rate limiting")
+
+lib.od_cmac.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_size_t, ct.c_void_p]
+lib.od_cmac.restype = ct.c_bool
+lib.od_ccm.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_void_p, ct.c_void_p, ct.c_size_t, ct.c_bool]
+lib.od_ccm.restype = ct.c_bool
+key, nonce, aad = bytes(range(16)), bytes(range(13)), b"\0\x71"
+for n in range(257):
+    data = bytes((i * 17 + n) % 256 for i in range(n))
+    output = ct.create_string_buffer(16)
+    assert lib.od_cmac(key, data, n, output)
+    assert output.raw == cmac(key, data), n
+for n in range(215):
+    plain = bytes((i * 17 + n) % 256 for i in range(n))
+    expected = AESCCM(key, tag_length=12).encrypt(nonce, plain, aad)
+    data = ct.create_string_buffer(plain, n + 12)
+    assert lib.od_ccm(key, nonce, aad, data, n, False)
+    assert data.raw == expected, n
+    assert lib.od_ccm(key, nonce, aad, data, n, True)
+    assert data.raw[:n] == plain, n
+    for i in range(12):
+        bad = bytearray(expected); bad[n + i] ^= 1
+        data = ct.create_string_buffer(bytes(bad), n + 12)
+        assert not lib.od_ccm(key, nonce, aad, data, n, True), (n, i)
+        assert data.raw[:n] == bytes(n), (n, i)
+# Failure in any AES block must propagate, including late CTR/MAC failures.
+for decrypting in (False, True):
+    plain = bytes(range(214))
+    wire = AESCCM(key, tag_length=12).encrypt(nonce, plain, aad)
+    for fail_at in range(31):
+        data = ct.create_string_buffer(wire if decrypting else plain + bytes(12), 226)
+        lib.fail_aes_after(fail_at)
+        assert not lib.od_ccm(key, nonce, aad, data, 214, decrypting), fail_at
+        assert data.raw[:214] == bytes(214), fail_at
+lib.fail_aes_after(-1)
+for invalid in (215, 65536):
+    data = ct.create_string_buffer(b"unchanged")
+    assert not lib.od_ccm(key, nonce, aad, data, invalid, False)
+    assert data.value == b"unchanged"
+for fail_at in range(5):
+    lib.fail_aes_after(fail_at)
+    assert not lib.od_cmac(key, bytes(58), 58, ct.create_string_buffer(16))
+lib.fail_aes_after(-1)
+print("Crypto modes passed: all payload lengths, in-place operation, tag corruption and AES failure propagation")

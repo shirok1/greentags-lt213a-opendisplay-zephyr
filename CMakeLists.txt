@@ -15,11 +15,4 @@ target_sources(app PRIVATE src/config_store.c src/storage.c)
 target_sources(app PRIVATE src/security.c)
 target_sources(app PRIVATE third_party/uzlib/od_zlib_stream.c third_party/uzlib/adler32.c)
 target_include_directories(app PRIVATE third_party/uzlib)
-# Zephyr 4.x no longer integrates TinyCrypt; build the application primitives.
-set(TINYCRYPT_LIB ${ZEPHYR_TINYCRYPT_MODULE_DIR}/lib)
-target_include_directories(app PRIVATE ${TINYCRYPT_LIB}/include)
-target_sources(app PRIVATE
-    ${TINYCRYPT_LIB}/source/aes_encrypt.c
-    ${TINYCRYPT_LIB}/source/cmac_mode.c
-    ${TINYCRYPT_LIB}/source/ccm_mode.c
-    ${TINYCRYPT_LIB}/source/utils.c)
+target_sources(app PRIVATE src/crypto.c src/crypto_zephyr.c)

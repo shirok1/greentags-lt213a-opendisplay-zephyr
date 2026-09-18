@@ -15,7 +15,7 @@
 | 命令、PIPE、raw/zlib 流、传输恢复 | `src/protocol.c`、`src/protocol.h`；`tests/test_protocol.c` |
 | 配置容器、CRC、双槽事务、名称与局刷参数 | `src/config_store.c`；`tests/test_storage.c`、`tests/test_protocol.c` |
 | Zephyr Flash 适配与分区 | `src/storage.c`；`boards/greentags/lt213a/lt213a_nrf51822.dts` |
-| 认证、加密、会话与重放窗口 | `src/security.c`；`tests/test_security.py`、`tests/security_bridge.c` |
+| 认证、加密、会话与重放窗口 | `src/security.c`、`src/crypto.c`、`src/crypto_zephyr.c`；`tests/test_security.py`、`tests/security_bridge.c` |
 | 屏幕时序、波形、休眠 | `src/epd.c`；`scripts/test_epd.py`、`tests/test_epd.c` |
 | 温度、VDD 与广播遥测 | `src/telemetry.c`；`scripts/test_telemetry.py`、`tests/test_telemetry.c` |
 | 上传、序列号、局刷帧数工具 | `scripts/upload.py`、`scripts/set_serial.py`、`scripts/set_partial_frames.py`；对应 `tests/test_*.py` |
@@ -42,7 +42,7 @@ uv run --locked python scripts/test.py
   屏幕休眠或构建配置变更还需构建 `--no-epd-deep-sleep` 对照版本，CI 流程见
   [.github/workflows](.github/workflows)。两种构建共用 `build/`，后一次会覆盖前一次产物。
 - 主机测试统一入口是 `scripts/test.py`，它生成共享 fixture 后运行 C sanitizer 和 Python 测试。
-  `tests/test_security.py` 依赖该入口生成的配置与 `.deps/` 中的 TinyCrypt，不能当作完全独立的测试运行。
+  `tests/test_security.py` 依赖该入口生成的配置；AES 主机后端使用 uv 管理的 cryptography，不能当作完全独立的测试运行。
 - Python 工具变更运行主机测试；纯文档变更核对路径、命令和事实即可。
 - `tests/*_hardware.py` 是实机脚本，可能写入配置、刷新屏幕或注入故障；仅在任务包含对应设备操作时执行，
   先读脚本前提并确定目标设备。烧录命令中的 mass erase 会清除持久配置，具体流程见 README。
