@@ -1,7 +1,7 @@
 /*
  * OpenDisplay streaming zlib inflater, based on uzlib/tinf.
- * LT213A modifications: four-bit code lengths, nine-bit literal/length symbols,
- * and eight-bit distance/code-length symbols.
+ * LT213A modifications: four-bit code lengths and canonical rank lookup.
+ * Only the temporary code-length alphabet needs a symbol translation table.
  */
 
 #include <string.h>
@@ -17,16 +17,6 @@
 #if OPENDISPLAY_ZLIB_USE_HEAP_WINDOW != 0 && OPENDISPLAY_ZLIB_USE_HEAP_WINDOW != 1
 #error "OPENDISPLAY_ZLIB_USE_HEAP_WINDOW must be 0 or 1"
 #endif
-
-typedef struct {
-    unsigned short table[16];
-    uint8_t trans[324]; /* 288 low bytes + 36 high-bit bytes */
-} TINF_LITERAL_TREE;
-
-typedef struct {
-    unsigned short table[16];
-    uint8_t trans[32];
-} TINF_DISTANCE_TREE;
 
 typedef struct {
     unsigned short table[16];
@@ -102,73 +92,53 @@ typedef enum {
 } dynamic_stage_t;
 
 typedef struct {
-    inflate_stage_t stage;
-    block_stage_t block_stage;
-    dynamic_stage_t dynamic_stage;
-
     const uint8_t *input;
+    const char *error;
     size_t input_remaining;
-    bool input_final;
-    bool initialized;
-
-    uint8_t bit_tag;
-    uint8_t bit_count;
-
-    bool read_bits_active;
-    uint8_t read_bits_num;
-    uint8_t read_bits_pos;
     unsigned int read_bits_base;
     unsigned int read_bits_value;
-
-    bool sym_active;
-    int sym_sum;
-    int sym_cur;
-    int sym_len;
-
-    uint8_t cmf;
-    uint8_t bfinal;
-    uint8_t btype;
-
-    TINF_LITERAL_TREE ltree;
-    union {
-        TINF_DISTANCE_TREE dtree;
-        TINF_CODELEN_TREE cltree;
-    } tree;
-
-    unsigned char lengths[(288 + 32) / 2];
-    unsigned int hlit;
-    unsigned int hdist;
-    unsigned int hclen;
-    unsigned int hlimit;
-    unsigned int dyn_i;
-    unsigned int dyn_num;
-    unsigned char dyn_fill_value;
-    unsigned int dyn_repeat_len;
-    unsigned int dyn_repeat_bits;
-    unsigned int dyn_repeat_base;
-
-    uint8_t stored_header_index;
-    uint16_t stored_len;
-    uint16_t stored_invlen;
-
+    int sym_cur; /* A malformed 16-bit path can reach 65535 before rejection. */
     unsigned int match_len;
     unsigned int match_offset;
-    int length_sym;
-    int dist_sym;
+    uint32_t expected_output;
+    uint32_t output_count;
+    uint32_t adler;
 
+    /* Header decoding and data decoding are mutually exclusive. Retain the
+     * packed lengths for canonical symbol lookup instead of translation arrays. */
+    union {
+        struct {
+            unsigned short literal[16];
+            unsigned short distance[16];
+        } data;
+        struct {
+            TINF_CODELEN_TREE codes;
+            uint16_t hlimit, dyn_num;
+            uint8_t hclen, dyn_i, dyn_fill_value;
+            uint8_t dyn_repeat_len, dyn_repeat_bits, dyn_repeat_base;
+            dynamic_stage_t stage;
+        } header;
+        struct { uint16_t len, invlen; uint8_t index; } stored;
+        struct { uint32_t value; uint8_t index; } trailer;
+    } tree;
+    unsigned char lengths[(288 + 32) / 2];
 #if OPENDISPLAY_ZLIB_USE_HEAP_WINDOW
     uint8_t *window;
 #else
     uint8_t window[OPENDISPLAY_ZLIB_WINDOW_SIZE];
 #endif
-    unsigned int window_pos;
-    uint32_t expected_output;
-    uint32_t output_count;
-    uint32_t adler;
-    uint8_t trailer_index;
-    uint32_t trailer_value;
 
-    const char *error;
+    /* DEFLATE has at most 320 lengths and a 32768-byte history window.
+     * Group bounded fields by width; no packed/unaligned member accesses. */
+    int16_t sym_sum;
+    uint16_t hlit, window_pos;
+    inflate_stage_t stage;
+    block_stage_t block_stage;
+    bool input_final, initialized, read_bits_active, sym_active;
+    uint8_t bit_tag, bit_count, read_bits_num, read_bits_pos;
+    uint8_t cmf, bfinal, btype, sym_len;
+    uint8_t hdist;
+    uint8_t length_sym, dist_sym;
 } od_zlib_stream_state_t;
 
 static od_zlib_stream_state_t s;
@@ -185,21 +155,6 @@ static unsigned get_length(unsigned i) { return (s.lengths[i / 2] >> ((i & 1) * 
 static void set_length(unsigned i, unsigned value) {
     unsigned shift = (i & 1) * 4;
     s.lengths[i / 2] = (s.lengths[i / 2] & ~(15u << shift)) | (value << shift);
-}
-
-/* count is the symbol capacity, not the packed array byte size. Only the
- * 288-entry literal/length alphabet needs a ninth bit; smaller trees use bytes.
- * Store high bits separately to avoid unaligned accesses and cross-byte reads.
- */
-static void trans_set(uint8_t *trans, unsigned count, unsigned index, unsigned value) {
-    trans[index] = (uint8_t)value;
-    if (count > 256) {
-        unsigned shift = index & 7;
-        trans[count + index / 8] = (uint8_t)((trans[count + index / 8] & ~(1u << shift)) | (((value >> 8) & 1u) << shift));
-    }
-}
-static unsigned trans_get(const uint8_t *trans, unsigned count, unsigned index) {
-    return trans[index] | (count > 256 ? ((trans[count + index / 8] >> (index & 7)) & 1u) << 8 : 0);
 }
 
 static bool build_tree(unsigned short *table, uint8_t *trans, unsigned int trans_size, unsigned base, unsigned int num) {
@@ -226,26 +181,25 @@ static bool build_tree(unsigned short *table, uint8_t *trans, unsigned int trans
     }
 
     for (i = 0; i < num; ++i) {
-        if (get_length(base + i)) trans_set(trans, trans_size, offs[get_length(base + i)]++, i);
+        if (trans && get_length(base + i)) trans[offs[get_length(base + i)]++] = (uint8_t)i;
     }
     return true;
 }
 
 static void build_fixed_trees(void) {
-    int i;
-    memset(&s.ltree, 0, sizeof(s.ltree));
-    memset(&s.tree.dtree, 0, sizeof(s.tree.dtree));
-
-    s.ltree.table[7] = 24;
-    s.ltree.table[8] = 152;
-    s.ltree.table[9] = 112;
-    for (i = 0; i < 24; ++i) trans_set(s.ltree.trans, 288, i, 256 + i);
-    for (i = 0; i < 144; ++i) trans_set(s.ltree.trans, 288, 24 + i, i);
-    for (i = 0; i < 8; ++i) trans_set(s.ltree.trans, 288, 24 + 144 + i, 280 + i);
-    for (i = 0; i < 112; ++i) trans_set(s.ltree.trans, 288, 24 + 144 + 8 + i, 144 + i);
-
-    s.tree.dtree.table[5] = 32;
-    for (i = 0; i < 32; ++i) s.tree.dtree.trans[i] = i;
+    unsigned i;
+    memset(&s.tree.data, 0, sizeof(s.tree.data));
+    s.hlit = 288;
+    s.hdist = 32;
+    s.tree.data.literal[7] = 24;
+    s.tree.data.literal[8] = 152;
+    s.tree.data.literal[9] = 112;
+    s.tree.data.distance[5] = 32;
+    for (i = 0; i < 144; ++i) set_length(i, 8);
+    for (; i < 256; ++i) set_length(i, 9);
+    for (; i < 280; ++i) set_length(i, 7);
+    for (; i < 288; ++i) set_length(i, 8);
+    for (; i < 320; ++i) set_length(i, 5);
 }
 
 static int read_byte(uint8_t *value) {
@@ -295,7 +249,7 @@ static int read_bits(unsigned int num, unsigned int base, unsigned int *value) {
     return 1;
 }
 
-static int decode_symbol(const unsigned short *table, const uint8_t *trans, unsigned int trans_size, int *symbol) {
+static int decode_symbol(const unsigned short *table, const uint8_t *trans, unsigned int trans_size, unsigned base, int *symbol) {
     if (!s.sym_active) {
         s.sym_active = true;
         s.sym_sum = 0;
@@ -323,7 +277,34 @@ static int decode_symbol(const unsigned short *table, const uint8_t *trans, unsi
         set_error("invalid huffman symbol");
         return -1;
     }
-    *symbol = (int)trans_get(trans, trans_size, s.sym_sum);
+    if (trans) {
+        *symbol = trans[s.sym_sum];
+    } else {
+        /* Canonical codes order equal-length symbols by numeric value.
+         * sym_cur is the negative offset from the end of this length group. */
+        int rank = s.sym_cur + table[s.sym_len];
+        int reverse_rank = table[s.sym_len] - 1 - rank;
+        unsigned left = 0, right = trans_size;
+        *symbol = -1;
+        /* Sparse alphabets often place literals at either end (0x00/0xff).
+         * Search both ends without another RAM translation table. */
+        while (left < right) {
+            if (get_length(base + left) == (unsigned)s.sym_len && rank-- == 0) {
+                *symbol = (int)left;
+                break;
+            }
+            if (++left == right) break;
+            --right;
+            if (get_length(base + right) == (unsigned)s.sym_len && reverse_rank-- == 0) {
+                *symbol = (int)right;
+                break;
+            }
+        }
+        if (*symbol < 0) {
+            set_error("invalid huffman symbol");
+            return -1;
+        }
+    }
     s.sym_active = false;
     return 1;
 }
@@ -339,7 +320,8 @@ static void adler_update_byte(uint8_t byte) {
     s1 += byte;
     if (s1 >= 65521u) s1 -= 65521u;
     s2 += s1;
-    s2 %= 65521u;
+    /* Both addends are below 65521, so one subtraction replaces division. */
+    if (s2 >= 65521u) s2 -= 65521u;
     s.adler = (s2 << 16) | s1;
 }
 
@@ -363,96 +345,102 @@ static int process_dynamic_trees(void) {
     unsigned int value;
 
     for (;;) {
-        switch (s.dynamic_stage) {
+        switch (s.tree.header.stage) {
         case DYN_HLIT:
-            if (read_bits(5, 257, &s.hlit) <= 0) return s.stage == ST_ERROR ? -1 : 0;
-            s.dynamic_stage = DYN_HDIST;
+            if (read_bits(5, 257, &value) <= 0) return s.stage == ST_ERROR ? -1 : 0;
+            s.hlit = value;
+            s.tree.header.stage = DYN_HDIST;
             break;
         case DYN_HDIST:
-            if (read_bits(5, 1, &s.hdist) <= 0) return s.stage == ST_ERROR ? -1 : 0;
-            s.dynamic_stage = DYN_HCLEN;
+            if (read_bits(5, 1, &value) <= 0) return s.stage == ST_ERROR ? -1 : 0;
+            s.hdist = value;
+            s.tree.header.stage = DYN_HCLEN;
             break;
         case DYN_HCLEN:
-            if (read_bits(4, 4, &s.hclen) <= 0) return s.stage == ST_ERROR ? -1 : 0;
+            if (read_bits(4, 4, &value) <= 0) return s.stage == ST_ERROR ? -1 : 0;
+            s.tree.header.hclen = value;
             if (s.hlit > 286 || s.hdist > 32 || s.hlit + s.hdist > (2 * TINF_ARRAY_SIZE(s.lengths))) {
                 set_error("invalid dynamic tree sizes");
                 return -1;
             }
-            s.dyn_i = 0;
-            s.dynamic_stage = DYN_CLEAR_CLEN;
+            s.tree.header.dyn_i = 0;
+            s.tree.header.stage = DYN_CLEAR_CLEN;
             break;
         case DYN_CLEAR_CLEN:
-            while (s.dyn_i < 19) set_length(s.dyn_i++, 0);
-            s.dyn_i = 0;
-            s.dynamic_stage = DYN_READ_CLEN;
+            while (s.tree.header.dyn_i < 19) set_length(s.tree.header.dyn_i++, 0);
+            s.tree.header.dyn_i = 0;
+            s.tree.header.stage = DYN_READ_CLEN;
             break;
         case DYN_READ_CLEN:
-            while (s.dyn_i < s.hclen) {
+            while (s.tree.header.dyn_i < s.tree.header.hclen) {
                 if (read_bits(3, 0, &value) <= 0) return s.stage == ST_ERROR ? -1 : 0;
-                set_length(clcidx[s.dyn_i++], value);
+                set_length(clcidx[s.tree.header.dyn_i++], value);
             }
-            s.dynamic_stage = DYN_BUILD_CLTREE;
+            s.tree.header.stage = DYN_BUILD_CLTREE;
             break;
         case DYN_BUILD_CLTREE:
-            if (!build_tree(s.tree.cltree.table, s.tree.cltree.trans, TINF_ARRAY_SIZE(s.tree.cltree.trans), 0, 19)) return -1;
-            s.hlimit = s.hlit + s.hdist;
-            s.dyn_num = 0;
-            s.dynamic_stage = DYN_READ_LENGTHS;
+            if (!build_tree(s.tree.header.codes.table, s.tree.header.codes.trans, TINF_ARRAY_SIZE(s.tree.header.codes.trans), 0, 19)) return -1;
+            s.tree.header.hlimit = s.hlit + s.hdist;
+            s.tree.header.dyn_num = 0;
+            s.tree.header.stage = DYN_READ_LENGTHS;
             reset_code_readers();
             break;
         case DYN_READ_LENGTHS:
-            while (s.dyn_num < s.hlimit) {
-                int rc = decode_symbol(s.tree.cltree.table, s.tree.cltree.trans, TINF_ARRAY_SIZE(s.tree.cltree.trans), &sym);
+            while (s.tree.header.dyn_num < s.tree.header.hlimit) {
+                int rc = decode_symbol(s.tree.header.codes.table, s.tree.header.codes.trans, TINF_ARRAY_SIZE(s.tree.header.codes.trans), 0, &sym);
                 if (rc <= 0) return s.stage == ST_ERROR ? -1 : 0;
                 if (sym < 16) {
-                    set_length(s.dyn_num++, sym);
+                    set_length(s.tree.header.dyn_num++, sym);
                     continue;
                 }
                 if (sym == 16) {
-                    if (s.dyn_num == 0) {
+                    if (s.tree.header.dyn_num == 0) {
                         set_error("invalid dynamic repeat");
                         return -1;
                     }
-                    s.dyn_fill_value = get_length(s.dyn_num - 1);
-                    s.dyn_repeat_bits = 2;
-                    s.dyn_repeat_base = 3;
+                    s.tree.header.dyn_fill_value = get_length(s.tree.header.dyn_num - 1);
+                    s.tree.header.dyn_repeat_bits = 2;
+                    s.tree.header.dyn_repeat_base = 3;
                 } else if (sym == 17) {
-                    s.dyn_fill_value = 0;
-                    s.dyn_repeat_bits = 3;
-                    s.dyn_repeat_base = 3;
+                    s.tree.header.dyn_fill_value = 0;
+                    s.tree.header.dyn_repeat_bits = 3;
+                    s.tree.header.dyn_repeat_base = 3;
                 } else if (sym == 18) {
-                    s.dyn_fill_value = 0;
-                    s.dyn_repeat_bits = 7;
-                    s.dyn_repeat_base = 11;
+                    s.tree.header.dyn_fill_value = 0;
+                    s.tree.header.dyn_repeat_bits = 7;
+                    s.tree.header.dyn_repeat_base = 11;
                 } else {
                     set_error("invalid dynamic code length symbol");
                     return -1;
                 }
-                s.dynamic_stage = DYN_REPEAT_BITS;
+                s.tree.header.stage = DYN_REPEAT_BITS;
                 break;
             }
-            if (s.dynamic_stage != DYN_READ_LENGTHS) break;
-            s.dynamic_stage = DYN_BUILD_TREES;
+            if (s.tree.header.stage != DYN_READ_LENGTHS) break;
+            s.tree.header.stage = DYN_BUILD_TREES;
             break;
         case DYN_REPEAT_BITS:
-            if (read_bits(s.dyn_repeat_bits, s.dyn_repeat_base, &s.dyn_repeat_len) <= 0) {
+            if (read_bits(s.tree.header.dyn_repeat_bits, s.tree.header.dyn_repeat_base, &value) <= 0) {
                 return s.stage == ST_ERROR ? -1 : 0;
             }
-            if (s.dyn_num + s.dyn_repeat_len > s.hlimit) {
+            s.tree.header.dyn_repeat_len = value;
+            if (s.tree.header.dyn_num + s.tree.header.dyn_repeat_len > s.tree.header.hlimit) {
                 set_error("dynamic repeat exceeds tree size");
                 return -1;
             }
-            while (s.dyn_repeat_len--) set_length(s.dyn_num++, s.dyn_fill_value);
-            s.dynamic_stage = DYN_READ_LENGTHS;
+            while (s.tree.header.dyn_repeat_len > 0) {
+                set_length(s.tree.header.dyn_num++, s.tree.header.dyn_fill_value);
+                s.tree.header.dyn_repeat_len--;
+            }
+            s.tree.header.stage = DYN_READ_LENGTHS;
             break;
         case DYN_BUILD_TREES:
             if (get_length(256) == 0) {
                 set_error("dynamic tree missing end-of-block");
                 return -1;
             }
-            if (!build_tree(s.ltree.table, s.ltree.trans, 288, 0, s.hlit)) return -1;
-            if (!build_tree(s.tree.dtree.table, s.tree.dtree.trans, TINF_ARRAY_SIZE(s.tree.dtree.trans), s.hlit, s.hdist)) return -1;
-            s.dynamic_stage = DYN_HLIT;
+            if (!build_tree(s.tree.data.literal, NULL, s.hlit, 0, s.hlit)) return -1;
+            if (!build_tree(s.tree.data.distance, NULL, s.hdist, s.hlit, s.hdist)) return -1;
             reset_code_readers();
             return 1;
         }
@@ -461,32 +449,32 @@ static int process_dynamic_trees(void) {
 
 static int process_stored_header(void) {
     uint8_t byte;
-    while (s.stored_header_index < 4) {
+    while (s.tree.stored.index < 4) {
         int rc = read_byte(&byte);
         if (rc <= 0) return rc;
-        if (s.stored_header_index == 0) s.stored_len = byte;
-        else if (s.stored_header_index == 1) s.stored_len |= (uint16_t)byte << 8;
-        else if (s.stored_header_index == 2) s.stored_invlen = byte;
-        else s.stored_invlen |= (uint16_t)byte << 8;
-        s.stored_header_index++;
+        if (s.tree.stored.index == 0) s.tree.stored.len = byte;
+        else if (s.tree.stored.index == 1) s.tree.stored.len |= (uint16_t)byte << 8;
+        else if (s.tree.stored.index == 2) s.tree.stored.invlen = byte;
+        else s.tree.stored.invlen |= (uint16_t)byte << 8;
+        s.tree.stored.index++;
     }
-    if (s.stored_len != (uint16_t)(~s.stored_invlen)) {
+    if (s.tree.stored.len != (uint16_t)(~s.tree.stored.invlen)) {
         set_error("invalid stored block length");
         return -1;
     }
-    s.stored_header_index = 0;
+    s.tree.stored.index = 0;
     return 1;
 }
 
 static int process_stored_data(uint8_t *output, size_t capacity, size_t *produced) {
-    while (s.stored_len > 0) {
+    while (s.tree.stored.len > 0) {
         uint8_t byte;
         int rc;
         if (*produced >= capacity) return 2;
         rc = read_byte(&byte);
         if (rc <= 0) return rc;
         if (!put_output_byte(byte, output, capacity, produced)) return s.stage == ST_ERROR ? -1 : 2;
-        s.stored_len--;
+        s.tree.stored.len--;
     }
     return 1;
 }
@@ -498,7 +486,7 @@ static int process_block_data(uint8_t *output, size_t capacity, size_t *produced
         if (*produced >= capacity) return 2;
         switch (s.block_stage) {
         case BLK_SYMBOL: {
-            int rc = decode_symbol(s.ltree.table, s.ltree.trans, 288, &sym);
+            int rc = decode_symbol(s.tree.data.literal, NULL, s.hlit, 0, &sym);
             if (rc <= 0) return rc;
             if (sym < 256) {
                 if (!put_output_byte((uint8_t)sym, output, capacity, produced)) return s.stage == ST_ERROR ? -1 : 2;
@@ -524,12 +512,13 @@ static int process_block_data(uint8_t *output, size_t capacity, size_t *produced
             s.block_stage = BLK_DIST_SYMBOL;
             break;
         case BLK_DIST_SYMBOL: {
-            int rc = decode_symbol(s.tree.dtree.table, s.tree.dtree.trans, TINF_ARRAY_SIZE(s.tree.dtree.trans), &s.dist_sym);
+            int rc = decode_symbol(s.tree.data.distance, NULL, s.hdist, s.hlit, &sym);
             if (rc <= 0) return rc;
-            if (s.dist_sym < 0 || s.dist_sym >= 30) {
+            if (sym < 0 || sym >= 30) {
                 set_error("invalid distance symbol");
                 return -1;
             }
+            s.dist_sym = sym;
             s.block_stage = BLK_DIST_EXTRA;
             break;
         }
@@ -559,15 +548,27 @@ static int process_block_data(uint8_t *output, size_t capacity, size_t *produced
     }
 }
 
+/* Block-specific scratch is shared. Initialize the trailer on transition,
+ * including after stored blocks and when the last checksum bytes arrive later. */
+static void end_block(void) {
+    if (s.bfinal) {
+        s.tree.trailer.value = 0;
+        s.tree.trailer.index = 0;
+        s.stage = ST_TRAILER;
+    } else {
+        s.stage = ST_BLOCK_FINAL;
+    }
+}
+
 static int process_trailer(void) {
     uint8_t byte;
-    while (s.trailer_index < 4) {
+    while (s.tree.trailer.index < 4) {
         int rc = read_byte(&byte);
         if (rc <= 0) return rc;
-        s.trailer_value = (s.trailer_value << 8) | byte;
-        s.trailer_index++;
+        s.tree.trailer.value = (s.tree.trailer.value << 8) | byte;
+        s.tree.trailer.index++;
     }
-    if (s.trailer_value != s.adler) {
+    if (s.tree.trailer.value != s.adler) {
         set_error("zlib adler32 mismatch");
         return -1;
     }
@@ -600,7 +601,7 @@ void od_zlib_stream_reset(uint32_t expected_output_size) {
 #endif
     s.stage = ST_ZLIB_CMF;
     s.block_stage = BLK_SYMBOL;
-    s.dynamic_stage = DYN_HLIT;
+    s.tree.header.stage = DYN_HLIT;
     s.expected_output = expected_output_size;
     s.adler = 1;
     s.initialized = true;
@@ -679,9 +680,9 @@ od_zlib_status_t od_zlib_stream_poll(uint8_t *output, size_t capacity, size_t *p
             s.btype = (uint8_t)value;
             if (s.btype == 0) {
                 s.bit_count = 0;
-                s.stored_header_index = 0;
-                s.stored_len = 0;
-                s.stored_invlen = 0;
+                s.tree.stored.index = 0;
+                s.tree.stored.len = 0;
+                s.tree.stored.invlen = 0;
                 s.stage = ST_STORED_LEN;
             } else if (s.btype == 1) {
                 build_fixed_trees();
@@ -689,7 +690,7 @@ od_zlib_status_t od_zlib_stream_poll(uint8_t *output, size_t capacity, size_t *p
                 reset_code_readers();
                 s.stage = ST_BLOCK_DATA;
             } else if (s.btype == 2) {
-                s.dynamic_stage = DYN_HLIT;
+                s.tree.header.stage = DYN_HLIT;
                 reset_code_readers();
                 s.stage = ST_DYNAMIC_TREES;
             } else {
@@ -715,14 +716,14 @@ od_zlib_status_t od_zlib_stream_poll(uint8_t *output, size_t capacity, size_t *p
             if (rc < 0) return OD_ZLIB_STATUS_ERROR;
             if (rc == 0) return *produced ? OD_ZLIB_STATUS_OUTPUT_READY : OD_ZLIB_STATUS_NEEDS_INPUT;
             if (rc == 2) return OD_ZLIB_STATUS_OUTPUT_READY;
-            s.stage = s.bfinal ? ST_TRAILER : ST_BLOCK_FINAL;
+            end_block();
             break;
         case ST_BLOCK_DATA:
             rc = process_block_data(output, capacity, produced);
             if (rc < 0) return OD_ZLIB_STATUS_ERROR;
             if (rc == 0) return *produced ? OD_ZLIB_STATUS_OUTPUT_READY : OD_ZLIB_STATUS_NEEDS_INPUT;
             if (rc == 2) return OD_ZLIB_STATUS_OUTPUT_READY;
-            if (rc == 3) s.stage = s.bfinal ? ST_TRAILER : ST_BLOCK_FINAL;
+            if (rc == 3) end_block();
             break;
         case ST_TRAILER:
             rc = process_trailer();
