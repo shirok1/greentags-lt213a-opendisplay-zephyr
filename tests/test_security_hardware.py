@@ -48,6 +48,7 @@ async def check(address, before_path, after_path):
         await expect_error(AuthenticationRequiredError, connect())
         await expect_error(AuthenticationFailedError, connect(bytes(16)))
         print('Missing/wrong key rejected with SDK exceptions', flush=True)
+        auth_window_started = monotonic()
         async with OpenDisplayDevice(mac_address=address, encryption_key=key, timeout=20) as d:
             assert d.config.security_config.encryption_key == key
             good = d._encrypt_frame(b'\0\x44')
@@ -69,6 +70,40 @@ async def check(address, before_path, after_path):
             await d._write_pipe_frame(build_pipe_write_data_command(1, bytes(16)), response=True)
             assert (await d._read(5))[:3] == b'\0\x81\1'
             print('Duplicate PIPE nonce discarded; next DATA acknowledged', flush=True)
+        # Exercise ATT read responses while encrypted notifications are in flight.
+        async with OpenDisplayDevice(mac_address=address, encryption_key=key, timeout=20) as d:
+            # GAP is hidden by some CoreBluetooth service filters. The visible
+            # CCC descriptor exercises ATT reads alongside notification traffic.
+            ccc = next(desc for service in d._conn._client.services
+                       for char in service.characteristics for desc in char.descriptors
+                       if desc.uuid == '00002902-0000-1000-8000-00805f9b34fb')
+            async def descriptor_reads():
+                for _ in range(40):
+                    # CoreBluetooth/bleak may represent numeric CCC values
+                    # differently; this test checks request completion, not encoding.
+                    await asyncio.wait_for(d._conn._client.read_gatt_descriptor(
+                        ccc.handle, use_cached=False), timeout=5)
+                    await asyncio.sleep(.05)
+            reads = asyncio.create_task(descriptor_reads())
+            try:
+                for _ in range(5):
+                    assert serialize_config(await d.interrogate()) == serialize_config(secured)
+                await reads
+            finally:
+                reads.cancel()
+                await asyncio.gather(reads, return_exceptions=True)
+        print('Five encrypted config reads with 40 concurrent descriptor reads passed', flush=True)
+        for _ in range(3):
+            async with OpenDisplayDevice(mac_address=address, encryption_key=key, config=original, timeout=20) as d:
+                await d._write(b'\0\x40')
+                assert (await d._read(5))[:4] == b'\0\x40\0\0'
+                # Leave while the rest of the configuration is still being sent.
+            async with OpenDisplayDevice(mac_address=address, encryption_key=key, timeout=20) as d:
+                assert serialize_config(d.config) == serialize_config(secured)
+        print('Disconnect during config notifications and fresh authenticated reconnect passed (3 cycles)', flush=True)
+        # Faster links can finish these nine authentication attempts inside
+        # one minute. Respect the firmware's 10/minute limiter for later tests.
+        await asyncio.sleep(max(0, 61 - (monotonic() - auth_window_started)))
         before = Image.open(before_path).convert('RGB')
         after = Image.open(after_path).convert('RGB')
         assert before.size == after.size == (104, 212)

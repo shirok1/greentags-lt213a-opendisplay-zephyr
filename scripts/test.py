@@ -56,3 +56,5 @@ subprocess.run([sys.executable, "scripts/test_telemetry.py"], check=True)
 subprocess.run([sys.executable, "tests/test_upload.py"], check=True)
 subprocess.run([sys.executable, "tests/test_serial.py"], check=True)
 subprocess.run([sys.executable, "tests/test_partial_frames.py"], check=True)
+
+subprocess.run([sys.executable, "tests/test_notify.py"], check=True)

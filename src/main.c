@@ -21,6 +21,11 @@ static atomic_t generation;
 static atomic_t link_up;
 /* A coalescing wakeup covers both queued commands and connection changes. */
 K_SEM_DEFINE(events, 0, 1);
+K_SEM_DEFINE(notify_done, 0, 1);
+/* Even tickets own an outstanding notification; odd tickets are completed.
+ * Only main starts a send. The callback may run after a timeout/disconnect. */
+static atomic_t notify_ticket = 1;
+static atomic_val_t notify_generation;
 static uint8_t msd[16] = {0x46, 0x24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
 
 struct command {
@@ -132,17 +137,51 @@ static bool live(const struct command *command)
            !bt_conn_get_info(command->conn, &info) && info.state == BT_CONN_STATE_CONNECTED;
 }
 
+static void notification_sent(struct bt_conn *conn, void *user_data)
+{
+    ARG_UNUSED(conn);
+    atomic_val_t ticket = (atomic_val_t)(uintptr_t)user_data;
+    /* Zephyr returns the ATT buffer before invoking this callback. */
+    if (atomic_cas(&notify_ticket, ticket, ticket | 1)) {
+        k_sem_give(&notify_done);
+    }
+}
+
 static int send_wire(void *ctx, const uint8_t *data, size_t len)
 {
     const struct command *command = ctx;
+    if (!live(command)) { return -ENOTCONN; }
+    uint32_t previous = (uint32_t)atomic_get(&notify_ticket);
+    /* Timeout does not cancel a queued notification. Keep its slot reserved
+     * on this connection, even if requesting its disconnect fails. */
+    if (!(previous & 1) && notify_generation == command->generation) {
+        return -EBUSY;
+    }
+    atomic_val_t ticket = (atomic_val_t)((previous + 2U) & ~1U);
+    notify_generation = command->generation;
+    atomic_set(&notify_ticket, ticket);
+    k_sem_reset(&notify_done);
+    struct bt_gatt_notify_params params = {
+        .attr = &display_service.attrs[2], .data = data, .len = len,
+        .func = notification_sent, .user_data = (void *)(uintptr_t)(uint32_t)ticket,
+    };
     int64_t deadline = k_uptime_get() + 2000;
     for (;;) {
-        if (!live(command)) { return -ENOTCONN; }
-        int err = bt_gatt_notify(command->conn, &display_service.attrs[2], data, len);
-        if (err != -ENOMEM && err != -EAGAIN) { return err; }
-        if (k_uptime_get() >= deadline) { return -ETIMEDOUT; }
+        int err = live(command) ? bt_gatt_notify_cb(command->conn, &params) : -ENOTCONN;
+        if (!err) { break; }
+        if ((err != -ENOMEM && err != -EAGAIN) || k_uptime_get() >= deadline) {
+            atomic_set(&notify_ticket, ticket | 1); /* Nothing was queued. */
+            return (err == -ENOMEM || err == -EAGAIN) ? -ETIMEDOUT : err;
+        }
         k_msleep(10);
     }
+    while (atomic_get(&notify_ticket) == ticket) {
+        if (!live(command)) { return -ENOTCONN; }
+        if (k_uptime_get() >= deadline) { return -ETIMEDOUT; }
+        /* Late callbacks may leave stale wakeups; the ticket is authoritative. */
+        k_sem_take(&notify_done, K_MSEC(10));
+    }
+    return live(command) ? 0 : -ENOTCONN;
 }
 
 static int send_response(void *ctx, const uint8_t *data, size_t len)

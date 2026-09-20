@@ -8,4 +8,9 @@ config LT213A_EPD_DEEP_SLEEP
       RESET wakes the panel for the next transfer. BUSY timeout cleanup
       never sends deep sleep before successful power-off.
 
+# This upstream symbol has no prompt; set the board-specific default before
+# importing Zephyr. Keep its high-priority RX and interrupt stacks unchanged.
+config BT_CTLR_RX_STACK_SIZE
+    default 768
+
 source "Kconfig.zephyr"
