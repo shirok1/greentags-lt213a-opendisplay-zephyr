@@ -161,3 +161,36 @@ for fail_at in range(5):
     assert not lib.od_cmac(key, bytes(58), 58, ct.create_string_buffer(16))
 lib.fail_aes_after(-1)
 print("Crypto modes passed: all payload lengths, in-place operation, tag corruption and AES failure propagation")
+
+# A new challenge must invalidate the old session, then install fresh counters.
+previous_packet = None
+for trial in range(3):
+    now = 600000 + trial * 100000
+    if trial == 1:
+        lib.disconnect_session()
+    hello = auth(b"\0", now)
+    assert hello[:3] == b"\0\x50\0" and not lib.authenticated()
+    response = ct.create_string_buffer(64)
+    assert lib.encrypt(b"\0\x71", 2, response, len(response)) < 0
+    server = hello[3:19]
+    material = cmac(master, b"OpenDisplay session\0" + device + client + server + b"\0\x80")
+    aes = Cipher(algorithms.AES(master), modes.ECB()).encryptor()
+    session = aes.update((1).to_bytes(8, "big") + material[:8]) + aes.finalize()
+    session_id = cmac(session, client + server)[:8]
+    assert auth(client + cmac(master, server + client + device), now) == b"\0\x50\0" + cmac(session, server + client + device)
+    assert lib.authenticated()
+    if previous_packet is not None:
+        assert decrypt(previous_packet, now)[0] < 0
+    fresh = packet(0)
+    assert decrypt(fresh, now) == (7, b"\0\x71hello")
+    assert decrypt(fresh, now)[0] < 0
+    for counter in range(2):
+        size = lib.encrypt(b"\0\x71", 2, response, len(response))
+        wire = response.raw[:size]
+        assert int.from_bytes(wire[10:18], "big") == (1 << 63) + counter
+        assert AESCCM(session, tag_length=12).decrypt(wire[5:18], wire[18:], wire[:2]) == b"\0"
+    previous_packet = packet(1)
+    assert lib.expire(now + 59999) == 0
+    if trial == 2:
+        assert lib.expire(now + 60000) == 1
+print("Reauthentication passed: challenge invalidation, fresh TX domain/RX replay state and old-session rejection")

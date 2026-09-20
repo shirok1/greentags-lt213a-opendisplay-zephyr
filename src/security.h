@@ -4,11 +4,20 @@
 #include <stdbool.h>
 
 struct od_security {
-    uint8_t key[16], id[8], challenge[16];
-    uint64_t rx_counter, tx_counter;
-    uint32_t replay, challenge_time, session_start, rate_time;
+    uint8_t key[16], id[8];
+    /* pending owns handshake scratch; authenticated owns the session state.
+     * Key/id remain separate: the final proof still needs the challenge. */
+    union {
+        struct { uint8_t challenge[16]; uint32_t started; } handshake;
+        struct {
+            uint64_t rx_counter, tx_counter;
+            uint32_t replay, started;
+            bool rx_seen;
+        } session;
+    } phase;
+    uint32_t rate_time;
     uint8_t attempts;
-    bool authenticated, pending, rx_seen;
+    bool authenticated, pending;
 };
 void od_security_reset(struct od_security *s);
 bool od_security_enabled(void);
