@@ -22,7 +22,7 @@ uv run --locked python scripts/build.py --setup
 uv run --locked python scripts/test.py
 ```
 
-Python 使用 3.12，由 uv 管理环境。`--setup` 将 Zephyr 正式 tag、该 tag 的 manifest 白名单中固定的 CMSIS 6 / Nordic HAL 下载到 `.deps/`；后续构建省略该参数。更换工具链或 Zephyr 版本时用 `--pristine` 重建。升级旧工作区时，按[内存文档](performance.md)先撤销依赖目录中遗留的缓冲补丁；新检出直接使用未修改的上游 Zephyr。
+Python 使用 3.12，由 uv 管理环境。`--setup` 将 Zephyr 正式 tag、该 tag 的 manifest 白名单中固定的 CMSIS 6 / Nordic HAL 下载到 `.deps/`；后续构建省略该参数。更换工具链或 Zephyr 版本时用 `--pristine` 重建。构建要求未修改的上游Zephyr；升级旧工作区时先检查 `.deps/zephyr` 的差异并处理遗留补丁，勿覆盖其他本地修改。
 
 从 3.7.1 工作目录升级时，旧构建可能修改过 `.deps/zephyr/subsys/bluetooth/host/att.c`。
 先用 `git -C .deps/zephyr diff -- subsys/bluetooth/host/att.c` 核对；若只有旧构建生成的 ATT 日志补丁，

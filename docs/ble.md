@@ -6,7 +6,18 @@
 
 Zephyr 4.4.2 使用 `BT_LE_ADV_OPT_CONN`，断开后由主循环重新启动快广播；连接引用尚未释放时沿用五秒重试。
 ACL 接收配置为 `BT_BUF_ACL_RX_COUNT_EXTRA=1`（两个 ACL 槽），与两个事件槽使用原生共享接收池。事件数量大于 ACL TX 数量。
-使用上游原生缓冲实现，ACL TX 数量为 1、Event RX 为 2，保留 MTU 247 和两个 L2CAP TX 缓冲；不再修改 Zephyr。约束见[性能文档](performance.md)。池耗尽、无线重传与重连尚需新版固件实机验证。
+使用上游原生缓冲实现，ACL TX 数量为 1、Event RX 为 2，保留 MTU 247 和两个 L2CAP TX 缓冲；不再修改 Zephyr。约束见[性能文档](performance.md)。已测加密上传、配置事务及重连，任意客户端压力和真实空口丢包仍需单独验证。
+
+当前使用 `BT_ATT_TX_COUNT=3`，应用等待每条通知的完成回调再发送下一条，给 GATT
+响应及无匹配时的错误替代响应留出缓冲。回调在上游真正归还 ATT 缓冲后执行。
+通知超时后仍保留占槽状态；同连接不能继续排队，主循环请求断开；跨连接递增 ticket
+过滤迟到回调。`generation` 和连接引用检查保持不变。
+
+三槽预算覆盖应用通知、GATT响应和无匹配时的错误替代响应。Zephyr的响应缓冲可能
+仍在等待销毁，不能假设一次请求只需要一个立即可重用的ATT槽。通知背压避免应用
+连续占用剩余槽，但不能证明任意客户端压力下永不耗尽。
+`bt_gatt_notify_cb()` 内部分配仍可能等待；应用层2秒期限只约束外层重试/完成等待，
+不覆盖该调用内部。超时及恢复的验证边界见 [验证指南](validation.md)。
 
 ## 地址、名称与序列号
 
@@ -44,11 +55,13 @@ uv run --locked python scripts/set_serial.py 'DEVICE_ADDRESS' --clear
 | 应用命令 | 整个 GATT 写入值最多 244 B；direct 数据另有 230 B 上限 |
 | ATT | 本地支持 MTU 247，普通写入值上限为 MTU 减 3 |
 | L2CAP / Host ACL | RX 缓冲 251 B 支持重组；TX MTU 247 |
-| Link Layer | 保留 27 B 链路包，较大的上层包可分片 |
+| Link Layer | 初始 27 B，DLE 上限 TX 56 / RX 37 B；较大的上层包可分片 |
 
-固定 Zephyr 版本的非 EATT MTU 取收发能力较小值。只增大 RX 而让 TX MTU 停留在 23，仍无法得到 247。反过来，保留 27 B ACL TX/链路包不代表 ATT 只能为 23；大 L2CAP 数据可以分片。
+固定 Zephyr 版本的非 EATT MTU 取收发能力较小值。只增大 RX 而让 TX MTU 停留在 23，仍无法得到 247。反过来，较小的 ACL TX/链路包不代表 ATT 只能为 23；大 L2CAP 数据可以分片。
 
-本项目启用了 nRF51 明文 DLE 能力，但最大链路包仍为 27 B。在已有 Mac 测试中，这让对端协商的 ATT MTU 从 185 提升到 247；单纯由固件主动交换 MTU 没有提升。直接把链路包也放大到 251 的候选曾超出 RAM，未采用。
+本项目启用nRF51明文DLE，上限TX56 B / RX37 B，实际长度由对端协商。RX37仍容纳于
+现有广播/数据共享节点预算；TX56可容纳49 B加密配置通知加ATT/L2CAP头，减少分片。
+ATT MTU协商与DLE相互独立，应分别记录实际值；不能从MTU247推断无线包也是247 B。
 
 这是已测设备组合的经验，不能强制所有中央设备选择 247。官方 SDK 默认 direct DATA 的 230 B 数据加命令头后为 232 B；在 MTU 185、写入值最多 182 B 的连接上无法容纳。应先记录实际 MTU 和 WWR 上限，再判断分包是否正确。
 
@@ -75,3 +88,5 @@ nRF51 的 Host 接收/GATT 回调可运行在系统工作队列，控制器还�
 在同一 BLE 身份下轮换 Zephyr/Mynewt 固件，曾出现 macOS 缓存旧 GATT 句柄导致订阅失败。跨固件对照应区分缓存问题与设备端属性权限；当时采用构建时测试身份完成对照，并未修改生产身份策略。
 
 底层依据为固定 Zephyr 的 [ATT 定义](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/host/att_internal.h)、[连接与分片](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/host/conn.c)。修改配置时应同时检查对应版本的实现与生成 `.config`。
+
+内存成本与参考吞吐见 [性能](performance.md)。

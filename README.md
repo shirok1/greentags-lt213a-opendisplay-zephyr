@@ -4,7 +4,11 @@ OpenDisplay-compatible firmware for the **Greentags LT213A**, with an
 **nRF51822 QFAB (128 KiB Flash / 16 KiB RAM)** and a **GDEW0213T5 (104 × 212)** e-paper panel.
 It uses Zephyr 4.4.2's BLE host and software controller, without Nordic SoftDevice.
 This is an independent, experimental port, not an official OpenDisplay firmware release.
-The 4.4.2 port has build/host-test validation only; hardware results below predate this upgrade.
+Firmware **0.5.0** uses three ATT buffers and serialized notification completion for GATT
+progress, asymmetric DLE (TX 56 / RX 37 bytes), and compact streaming decoder/session state.
+MTU 247, application authentication and the 512-byte decompression window are preserved.
+See the [BLE design](docs/ble.md), [resource budget](docs/performance.md) and
+[validation scope](docs/validation.md).
 
 [中文使用指南](docs/guide.zh-CN.md) · [Technical documentation / 技术文档](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
@@ -41,8 +45,8 @@ changing toolchains or Zephyr versions. The build entry point uses unmodified up
 Flash/RAM bounds and reset vectors. Outputs are in `build/zephyr/`.
 
 The application owns 126 KiB Flash; the last two 1 KiB pages hold configuration transaction
-slots. RAM is tightly constrained, with no dynamic heap or full-frame MCU buffer. Hardware AES and packed Huffman tables
-allow MTU 247 with smaller stack/buffer budgets; those budgets still need hardware validation. Use the
+slots. RAM is tightly constrained, with no dynamic heap or full-frame MCU buffer. Hardware AES and canonical Huffman lookup
+allow MTU 247 with the three-buffer ATT budget; measured stack margins are workload-specific. Use the
 current build report for memory usage; static RAM headroom is distinct from stack headroom.
 The default is global O2 + LTO and panel deep sleep; `--no-epd-deep-sleep` builds a power-off
 comparison variant into the same output directory. See [performance and memory](docs/performance.md).

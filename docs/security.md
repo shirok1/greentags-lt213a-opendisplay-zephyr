@@ -12,6 +12,9 @@ SecurityConfig 使用 TLV `0x27`。启用时必须提供非零 128 位密钥；�
 
 本项目认证 device_id 取 `DEVICEID[0]` 并按协议编码；BLE 名称回退取 `DEVICEID[1]` 的低 24 位，二者用途不同。密码学算法遵循项目固定的 [OpenDisplay encryption.cpp](https://github.com/OpenDisplay/Firmware/blob/7c9413edd9f7fa16e714f6ebc00b76efd3bad4eb/src/encryption.cpp)，主机测试用独立 OpenSSL 原语交叉验证，维护时不要用仅双方共享同一实现的测试替代它。
 
+challenge与已认证会话计数器复用互斥存储，key/id独立保留。生成最终proof后才清理
+握手状态并初始化发送计数器，重认证不得沿用旧窗口。
+
 挑战单次使用，包括错误证明；30 秒后失效。认证请求按一分钟窗口限速，限速状态跨断连和重认证保留。开始新握手会中止未完成图像/配置事务，避免旧会话数据进入新会话。
 
 ## 密码学实现边界
@@ -22,9 +25,16 @@ SecurityConfig 使用 TLV `0x27`。启用时必须提供非零 128 位密钥；�
 完整 tag 比较、失败载荷清理及重放窗口提交顺序保留；模式实现仅支持 13 B nonce、
 2 B AAD、12 B tag 和不超过 214 B 的加密正文，接口容量/重叠约束见 `src/crypto.h`。
 
-此后端替换尚无实机密码学和栈水位证据。Zephyr 的 ECB 局部参数副本未主动擦除，
+硬件后端已通过指定Mac的加密实机回归并采集栈水位；这不覆盖全部无线时序。
+Zephyr 的 ECB 局部参数副本未主动擦除，
 应用模式层的清理不覆盖已返回的驱动栈帧；不应宣称完整密钥擦除。
-内存和栈对照见[加密库与 RAM 预算](crypto-memory-options.md)。
+内存预算与栈测量见 [性能](performance.md)。
+
+Zephyr控制器公开接口提供AES块操作，本项目在模式层实现所需CMAC/CCM，以保持固定
+wire参数、错误处理和主机可测边界。另启用通用CRYPTO_NRF_ECB会与控制器后端冲突，
+不能直接争用寄存器。依据为固定版本的
+[controller crypto](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/controller/crypto/crypto.c)
+与 [ECB驱动](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/ecb.c)。
 
 ## 帧格式与 MTU 预算
 
